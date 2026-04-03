@@ -42,6 +42,7 @@ def plot_mo_q_results(all_episode_points, all_hv_timesteps, all_hv_points, weigh
     axes[1].legend(title="Weights")
 
     plt.tight_layout()
+    plt.savefig("results/mo_q_learning.png", dpi=300, bbox_inches="tight")
     plt.show()
 
 
@@ -85,6 +86,7 @@ def plot_owa_q_results(all_episode_points_owa, all_hv_timesteps_owa, all_hv_poin
     axes[1].legend(title="OWA weights")
 
     plt.tight_layout()
+    plt.savefig("results/owa_q_learning.png", dpi=300, bbox_inches="tight")
     plt.show()
 
 
@@ -128,6 +130,7 @@ def plot_chebyshev_q_results(all_episode_points_cheb, all_hv_timesteps_cheb, all
     axes[1].legend(title="Chebyshev weights")
 
     plt.tight_layout()
+    plt.savefig("results/chebyshev_q_learning.png", dpi=300, bbox_inches="tight")
     plt.show()
 
 
@@ -160,6 +163,7 @@ def plot_pql_results(episode_points_pql, hv_timesteps_pql, hv_points_pql):
     axes[1].legend()
 
     plt.tight_layout()
+    plt.savefig("results/pql.png", dpi=300, bbox_inches="tight")
     plt.show()
 
 def plot_all_comparisons(
@@ -225,5 +229,8 @@ def plot_all_comparisons(
     axes[1].grid(True)
     axes[1].legend()
 
+
     plt.tight_layout()
+    plt.savefig("results/hypervolume_comparison.png", dpi=300, bbox_inches="tight")
     plt.show()
+

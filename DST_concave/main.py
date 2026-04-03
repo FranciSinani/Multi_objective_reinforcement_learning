@@ -13,8 +13,6 @@ from plots import (
 )
 
 RUN_MODE = sys.argv[1].lower() if len(sys.argv) > 1 else "mo"
-# allowed:
-# mo, owa, cheb, pql, all, compare
 
 weights_list = [
     (0.9, 0.1),
@@ -38,10 +36,8 @@ cheb_settings = [
     (0.1, 0.9),
 ]
 
+# mo_q_learning
 
-# =========================================================
-# MO Q-LEARNING
-# =========================================================
 if RUN_MODE in ["mo", "all", "compare"]:
     all_episode_points = {}
     all_hv_timesteps = {}
@@ -72,9 +68,8 @@ if RUN_MODE in ["mo", "all", "compare"]:
         )
 
 
-# =========================================================
-# OWA Q-LEARNING
-# =========================================================
+# owa_q_learning
+
 if RUN_MODE in ["owa", "all", "compare"]:
     all_episode_points_owa = {}
     all_hv_timesteps_owa = {}
@@ -104,9 +99,8 @@ if RUN_MODE in ["owa", "all", "compare"]:
         )
 
 
-# =========================================================
-# CHEBYSHEV Q-LEARNING
-# =========================================================
+# chebyshev_q_learning
+
 if RUN_MODE in ["cheb", "all", "compare"]:
     all_episode_points_cheb = {}
     all_hv_timesteps_cheb = {}
@@ -136,9 +130,9 @@ if RUN_MODE in ["cheb", "all", "compare"]:
         )
 
 
-# =========================================================
-# PARETO Q-LEARNING
-# =========================================================
+
+# pareto_q_learning
+
 if RUN_MODE in ["pql", "all", "compare"]:
     episode_points_pql, hv_timesteps_pql, hv_points_pql = train_pql(
         total_timesteps=10000,
@@ -156,9 +150,9 @@ if RUN_MODE in ["pql", "all", "compare"]:
         )
 
 
-# =========================================================
-# ALL: show individual plots
-# =========================================================
+
+# all individual plots
+
 if RUN_MODE == "all":
     plot_mo_q_results(
         all_episode_points,
@@ -188,9 +182,9 @@ if RUN_MODE == "all":
     )
 
 
-# =========================================================
-# COMPARE: show combined comparison plot
-# =========================================================
+
+# combined comparison plot
+
 if RUN_MODE == "compare":
     plot_all_comparisons(
         all_episode_points,
