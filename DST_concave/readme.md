@@ -108,26 +108,25 @@ To compare them fairly, I compared the **solution sets they produced**, rather t
 ├── owa_q_learning.py
 ├── chebyshev_q_learning.py
 └── pareto_q_learning.py
+```
+---
+## Running the project 
 
-## Running the project
+Install the requirements: pip install -r requirements.txt
 
-Install the requirements:
+To run one algorithm only: 
 
-pip install -r requirements.txt
+python main.py mo 
+python main.py owa 
+python main.py cheb 
+python main.py pql 
 
-To run one algorithm only:
+To run all algorithms: 
 
-python main.py mo
-python main.py owa
-python main.py cheb
-python main.py pql
+python main.py all 
 
-To run all algorithms:
-
-python main.py all
-
-To run the combined comparison plot:
+To run the combined comparison plot: 
 
 python main.py compare
 
-The results are displayed automatically and saved in results folder
+

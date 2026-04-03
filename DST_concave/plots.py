@@ -5,7 +5,7 @@ from utils import extract_pareto_front
 def plot_mo_q_results(all_episode_points, all_hv_timesteps, all_hv_points, weights_list):
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    # LEFT: PARETO FRONT
+    #left: pareto front
     all_points = []
     for points in all_episode_points.values():
         for time_cost, treasure in points:
@@ -26,7 +26,7 @@ def plot_mo_q_results(all_episode_points, all_hv_timesteps, all_hv_points, weigh
     axes[0].grid(True)
     axes[0].legend()
 
-    # RIGHT: HYPERVOLUME VS TIMESTEP
+    #right: hypervolume vs timestep
     for weights in weights_list:
         axes[1].plot(
             all_hv_timesteps[weights],
@@ -49,7 +49,7 @@ def plot_mo_q_results(all_episode_points, all_hv_timesteps, all_hv_points, weigh
 def plot_owa_q_results(all_episode_points_owa, all_hv_timesteps_owa, all_hv_points_owa, owa_settings):
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    # LEFT: PARETO FRONT
+    #left: pareto front
     all_points = []
     for points in all_episode_points_owa.values():
         for time_cost, treasure in points:
@@ -70,7 +70,7 @@ def plot_owa_q_results(all_episode_points_owa, all_hv_timesteps_owa, all_hv_poin
     axes[0].grid(True)
     axes[0].legend()
 
-    # RIGHT: HYPERVOLUME VS TIMESTEP
+    #right: hypervolume vs timestep
     for owa_w in owa_settings:
         axes[1].plot(
             all_hv_timesteps_owa[owa_w],
@@ -93,7 +93,7 @@ def plot_owa_q_results(all_episode_points_owa, all_hv_timesteps_owa, all_hv_poin
 def plot_chebyshev_q_results(all_episode_points_cheb, all_hv_timesteps_cheb, all_hv_points_cheb, cheb_settings):
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    # LEFT: PARETO FRONT
+    #left: pareto front
     all_points = []
     for points in all_episode_points_cheb.values():
         for time_cost, treasure in points:
@@ -114,7 +114,7 @@ def plot_chebyshev_q_results(all_episode_points_cheb, all_hv_timesteps_cheb, all
     axes[0].grid(True)
     axes[0].legend()
 
-    # RIGHT: HYPERVOLUME VS TIMESTEP
+    #right: hypervolume vs timestep
     for cheb_w in cheb_settings:
         axes[1].plot(
             all_hv_timesteps_cheb[cheb_w],
@@ -137,7 +137,7 @@ def plot_chebyshev_q_results(all_episode_points_cheb, all_hv_timesteps_cheb, all
 def plot_pql_results(episode_points_pql, hv_timesteps_pql, hv_points_pql):
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    # LEFT: PARETO FRONT
+    #left: pareto front
     all_points = [(-time_cost, treasure) for time_cost, treasure in episode_points_pql]
     pareto_front = extract_pareto_front(all_points)
 
@@ -154,7 +154,7 @@ def plot_pql_results(episode_points_pql, hv_timesteps_pql, hv_points_pql):
     axes[0].grid(True)
     axes[0].legend()
 
-    # RIGHT: HYPERVOLUME VS TIMESTEP
+    #right: hypervolume vs timestep
     axes[1].plot(hv_timesteps_pql, hv_points_pql, marker="o", label="PQL")
     axes[1].set_xlabel("Timestep")
     axes[1].set_ylabel("Hypervolume")
@@ -186,7 +186,7 @@ def plot_all_comparisons(
     import numpy as np
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    # LEFT: combined Pareto fronts
+    #left: combined pareto front
     all_points_mo = [(-tc, tr) for pts in all_episode_points.values() for tc, tr in pts]
     all_points_owa = [(-tc, tr) for pts in all_episode_points_owa.values() for tc, tr in pts]
     all_points_cheb = [(-tc, tr) for pts in all_episode_points_cheb.values() for tc, tr in pts]
@@ -208,7 +208,7 @@ def plot_all_comparisons(
     axes[0].grid(True)
     axes[0].legend()
 
-    # RIGHT: combined hypervolume curves
+    #right: hypervolume vs timestep
     mo_hv_avg = np.mean(np.array([all_hv_points[w] for w in weights_list]), axis=0)
     mo_t = all_hv_timesteps[weights_list[0]]
 
@@ -233,4 +233,3 @@ def plot_all_comparisons(
     plt.tight_layout()
     plt.savefig("results/hypervolume_comparison.png", dpi=300, bbox_inches="tight")
     plt.show()
-
