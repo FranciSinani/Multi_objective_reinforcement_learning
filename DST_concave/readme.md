@@ -112,21 +112,23 @@ To compare them fairly, I compared the **solution sets they produced**, rather t
 ---
 ## Running the project 
 
-Install the requirements: pip install -r requirements.txt
+Install the requirements: 
+
+- pip install -r requirements.txt
 
 To run one algorithm only: 
 
-python main.py mo 
-python main.py owa 
-python main.py cheb 
-python main.py pql 
+- python main.py mo 
+- python main.py owa 
+- python main.py cheb 
+- python main.py pql 
 
 To run all algorithms: 
 
-python main.py all 
+- python main.py all 
 
 To run the combined comparison plot: 
 
-python main.py compare
+- python main.py compare
 
 
