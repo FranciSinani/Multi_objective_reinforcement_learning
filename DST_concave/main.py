@@ -16,23 +16,37 @@ RUN_MODE = sys.argv[1].lower() if len(sys.argv) > 1 else "mo"
 
 weights_list = [
     (0.9, 0.1),
+    (0.8, 0.2),
     (0.7, 0.3),
     (0.5, 0.5),
     (0.3, 0.7),
+    (0.2, 0.8),
+    (0.4, 0.6),
+    (0.6, 0.4),
     (0.1, 0.9),
 ]
 
 owa_settings = [
-    (0.5, 0.5),
+    (0.9, 0.1),
     (0.8, 0.2),
+    (0.7, 0.3),
+    (0.5, 0.5),
+    (0.3, 0.7),
     (0.2, 0.8),
+    (0.4, 0.6),
+    (0.6, 0.4),
+    (0.1, 0.9),
 ]
 
 cheb_settings = [
     (0.9, 0.1),
+    (0.8, 0.2),
     (0.7, 0.3),
     (0.5, 0.5),
     (0.3, 0.7),
+    (0.2, 0.8),
+    (0.4, 0.6),
+    (0.6, 0.4),
     (0.1, 0.9),
 ]
 
@@ -47,7 +61,7 @@ if RUN_MODE in ["mo", "all", "compare"]:
         episode_points, hv_timesteps, hv_points = train_mo_q(
             timeW=timeW,
             treasureW=treasureW,
-            total_timesteps=10000,
+            total_timesteps=200000,
             lr=0.1,
             gamma=0.99,
             epsilon_start=1.0,
@@ -78,7 +92,7 @@ if RUN_MODE in ["owa", "all", "compare"]:
     for owa_w in owa_settings:
         episode_points, hv_timesteps, hv_points = train_owa_q(
             owa_weights=owa_w,
-            total_timesteps=10000,
+            total_timesteps=200000,
             lr=0.1,
             gamma=0.99,
             epsilon_start=1.0,
@@ -109,7 +123,7 @@ if RUN_MODE in ["cheb", "all", "compare"]:
     for cheb_w in cheb_settings:
         episode_points, hv_timesteps, hv_points = train_chebyshev_q(
             cheb_weights=cheb_w,
-            total_timesteps=10000,
+            total_timesteps=200000,
             lr=0.1,
             gamma=0.99,
             epsilon_start=1.0,
@@ -135,7 +149,7 @@ if RUN_MODE in ["cheb", "all", "compare"]:
 
 if RUN_MODE in ["pql", "all", "compare"]:
     episode_points_pql, hv_timesteps_pql, hv_points_pql = train_pql(
-        total_timesteps=10000,
+        total_timesteps=200000,
         gamma=0.99,
         epsilon_start=1.0,
         epsilon_end=0.05,
