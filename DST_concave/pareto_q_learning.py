@@ -1,20 +1,27 @@
 import mo_gymnasium as mo_gym
 import numpy as np
 from collections import defaultdict
-from utils import get_non_dominated, compute_hypervolume_2d
+from utils import get_non_dominated
 
 
-def compute_hv_for_action_set(vectors, ref_point=(0, -100)):
+def compute_hv_for_vector_set(vectors, ref_point=(0.0, -100.0)):
     """
-    vectors are in original reward form:
-    (treasure, time_reward)
-    both are maximized
+    Hypervolume for vectors stored as:
+        (treasure_return, time_return)
+
+    Both objectives are maximized.
+    In DST:
+        treasure_return >= 0
+        time_return <= 0   (because each step gives -1)
+
+    ref_point is in the same coordinate system:
+        (treasure_ref, time_ref)
     """
     if not vectors:
         return 0.0
 
     nd = get_non_dominated(vectors)
-    nd = sorted(nd, key=lambda p: p[0])
+    nd = sorted(nd, key=lambda p: p[0])  # sort by treasure
 
     hv = 0.0
     prev_x = ref_point[0]
@@ -29,145 +36,155 @@ def compute_hv_for_action_set(vectors, ref_point=(0, -100)):
     return hv
 
 
-def add_vector_to_set(reward_vec, future_set, gamma):
-    result = []
+def add_vector_to_set(immediate_reward, future_set, gamma):
+    """
+    immediate_reward: (treasure_reward, time_reward)
+    future_set: list of future return vectors
+    """
+    out = []
     for vec in future_set:
-        new_vec = (
-            reward_vec[0] + gamma * vec[0],
-            reward_vec[1] + gamma * vec[1],
-        )
-        result.append(new_vec)
-    return result
+        out.append((
+            immediate_reward[0] + gamma * vec[0],
+            immediate_reward[1] + gamma * vec[1],
+        ))
+    return out
 
 
-def evaluate_final_pql_policy(env, Q_sets):
+def get_state(obs):
+    return (int(obs[0]), int(obs[1]))
 
-    # reset environment
-    obs, info = env.reset()
-    done = False
 
-    total_time_cost = 0 # will count the number of steps taken
-    final_treasure = 0.0 # best treasure value found during the episode
+def get_all_vectors_at_state(Q_sets, state, num_actions):
+    all_vectors = []
+    for a in range(num_actions):
+        all_vectors.extend(Q_sets[state][a])
+    return all_vectors
 
-    while not done:
 
-        state = (int(obs[0]), int(obs[1])) # convert observation to discrete state for Q-table
+def get_front_at_state(Q_sets, state, num_actions):
+    all_vectors = get_all_vectors_at_state(Q_sets, state, num_actions)
+    return get_non_dominated(all_vectors)
 
-        # select action with highest hypervolume from the set of vectors for each action
-        action_scores = []
-        for a in range(4):
-            action_scores.append(compute_hv_for_action_set(Q_sets[state][a]))
-        action = int(np.argmax(action_scores))
 
-        next_obs, reward_vec, terminated, truncated, info = env.step(action)
+def convert_vectors_to_plot_points(vectors, round_digits=8):
+    """
+    Convert internal vectors:
+        (treasure_return, time_return)
+    into plot points:
+        (time_cost, treasure_value)
 
-        # reward_vec = [treasure_reward, time_penalty], this is the order in mo_gymnasium DST environment
-        treasure_reward = float(reward_vec[0]) 
+    So plotting code can still use:
+        x = -time_cost
+        y = treasure_value
 
-        total_time_cost += 1  # we count manually (+1 per step) instead of using reward_vec[1]
-        final_treasure = max(final_treasure, treasure_reward) # we want the best treasure found during the episode, not the sum
+    IMPORTANT:
+    This matches real time cost / treasure cleanly when gamma = 1.0.
+    """
+    points = []
+    seen = set()
 
-        obs = next_obs # move to the next observation
-        done = terminated or truncated 
+    for treasure_ret, time_ret in vectors:
+        time_cost = -time_ret
+        treasure_value = treasure_ret
 
-    return (total_time_cost, final_treasure) # this order matches the convention expected by plotting
+        key = (round(time_cost, round_digits), round(treasure_value, round_digits))
+        if key not in seen:
+            seen.add(key)
+            points.append((float(time_cost), float(treasure_value)))
+
+    # sort by time cost
+    points.sort(key=lambda p: p[0])
+    return points
 
 
 def train_pql(
-    total_timesteps=200000,
-    gamma=0.99,
+    total_timesteps=400000,
+    gamma=1.0,              # keep 1.0 for DST if you want exact time_cost / treasure points
     epsilon_start=1.0,
     epsilon_end=0.05,
     log_interval=1000,
 ):
-    """Trains a Pareto Q-Learning (PQL) agent that maintains sets of non-dominated vectors for each state-action pair."""
-    
+    """
+    Correct PQL training:
+    - learns set-valued Q sets
+    - logs hypervolume of the learned Pareto front at the START STATE
+    - returns ALL learned final vectors from the START STATE for plotting
+    """
+
     env = mo_gym.make("deep-sea-treasure-concave-v0")
+    num_actions = env.action_space.n
 
-    num_actions = 4
+    # start state
+    start_obs, _ = env.reset()
+    start_state = get_state(start_obs)
 
-    # for each state: list of 4 action sets (each set contains non-dominated vectors)
+    # Q_sets[state][action] = list of non-dominated vectors
     Q_sets = defaultdict(lambda: [[(0.0, 0.0)] for _ in range(num_actions)])
 
-    hv_points = [] # to store hypervolume values at logging intervals
-    hv_timesteps = [] # corresponding timestep when hypervolume was computed
-    training_points = [] # to store the final evaluated solution (time_cost, treasure) of each episode
+    hv_timesteps = []
+    hv_points = []
 
-    global_step = 0 # counts total steps taken across episodes
-    next_log_step = log_interval # when to compute hypervolume next
+    global_step = 0
+    next_log_step = log_interval
 
-
-    # training loop
-    while global_step < total_timesteps:     
-        obs, info = env.reset()
+    while global_step < total_timesteps:
+        obs, _ = env.reset()
         done = False
 
-        total_time_cost = 0
-        final_treasure = 0.0
-
         while not done and global_step < total_timesteps:
-            state = (int(obs[0]), int(obs[1]))
+            state = get_state(obs)
 
-            # Linear epsilon decay: from epsilon_start down to epsilon_end over the course of training
-            epsilon = max( 
+            epsilon = max(
                 epsilon_end,
                 epsilon_start - (epsilon_start - epsilon_end) * (global_step / total_timesteps)
-            ) 
+            )
 
-            # Epsilon-greedy action selection using hypervolume of vector sets
-            if np.random.rand() < epsilon: 
-                action = env.action_space.sample() # random exploration
+            # epsilon-greedy over action-set hypervolume
+            if np.random.rand() < epsilon:
+                action = env.action_space.sample()
             else:
-                action_scores = []
-                for a in range(num_actions):
-                    action_scores.append(compute_hv_for_action_set(Q_sets[state][a]))
-                action = int(np.argmax(action_scores)) # select action with best hypervolume
+                action_scores = [
+                    compute_hv_for_vector_set(Q_sets[state][a], ref_point=(0.0, -100.0))
+                    for a in range(num_actions)
+                ]
+                action = int(np.argmax(action_scores))
 
-            next_obs, reward_vec, terminated, truncated, info = env.step(action)
-            global_step += 1
+            next_obs, reward_vec, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            next_state = get_state(next_obs)
 
-            next_state = (int(next_obs[0]), int(next_obs[1]))
+            immediate_reward = (float(reward_vec[0]), float(reward_vec[1]))
 
-            treasure_reward = float(reward_vec[0])
-            time_reward = float(reward_vec[1])
+            # terminal state -> no future return except zero vector
+            if done:
+                future_nd = [(0.0, 0.0)]
+            else:
+                future_candidates = get_all_vectors_at_state(Q_sets, next_state, num_actions)
+                future_nd = get_non_dominated(future_candidates)
 
-            total_time_cost += 1
-            final_treasure = max(final_treasure, treasure_reward)
-
-            immediate_reward = (treasure_reward, time_reward)
-
-            # collect all non-dominated vectors from next state
-            future_candidates = []
-            for a in range(num_actions):
-                future_candidates.extend(Q_sets[next_state][a])
-
-            future_nd = get_non_dominated(future_candidates)
-
-            # compute new vector set by adding immediate reward to future non-dominated vectors
             new_vectors = add_vector_to_set(immediate_reward, future_nd, gamma)
+
+            # keep non-dominated vectors for this state-action
             Q_sets[state][action] = get_non_dominated(new_vectors)
 
             obs = next_obs
-            done = terminated or truncated
+            global_step += 1
 
-        # after each episode we store the current episode's result for hypervolume calculation
-        training_points.append((total_time_cost, final_treasure))
-        
-        # log hypervolume at regular intervals
-        if global_step >= next_log_step:
-            hv = compute_hypervolume_2d(
-                [(-tc, tr) for tc, tr in training_points],
-                ref_point=(-100, 0)
-            )
-            hv_timesteps.append(global_step)
-            hv_points.append(hv)
-            next_log_step += log_interval
+            # log HV from the learned front at the START STATE
+            while global_step >= next_log_step:
+                start_front = get_front_at_state(Q_sets, start_state, num_actions)
+                hv = compute_hv_for_vector_set(start_front, ref_point=(0.0, -100.0))
 
-    # after training is complete, evaluate the final greedy policy
-    final_time_cost, final_treasure = evaluate_final_pql_policy(env, Q_sets)
+                hv_timesteps.append(next_log_step)
+                hv_points.append(hv)
+
+                next_log_step += log_interval
+
+    # FINAL learned vectors from the start state
+    final_vectors = get_all_vectors_at_state(Q_sets, start_state, num_actions)
+
+    # convert to (time_cost, treasure) for your existing plotting code
+    final_points = convert_vectors_to_plot_points(final_vectors)
 
     env.close()
-
-    # Return format expected by the new plotting code, one final evaluated point per run
-    final_point = [(final_time_cost, final_treasure)]
-    return final_point, hv_timesteps, hv_points
+    return final_points, hv_timesteps, hv_points

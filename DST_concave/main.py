@@ -58,10 +58,10 @@ if RUN_MODE in ["mo", "all", "compare"]:
     all_hv_points = {}
 
     for timeW, treasureW in weights_list:
-        episode_points, hv_timesteps, hv_points = train_mo_q(
+        final_point, hv_timesteps, hv_points = train_mo_q(
             timeW=timeW,
             treasureW=treasureW,
-            total_timesteps=200000,
+            total_timesteps=400000,
             lr=0.1,
             gamma=0.99,
             epsilon_start=1.0,
@@ -69,7 +69,7 @@ if RUN_MODE in ["mo", "all", "compare"]:
             log_interval=1000,
         )
 
-        all_episode_points[(timeW, treasureW)] = episode_points
+        all_episode_points[(timeW, treasureW)] = final_point
         all_hv_timesteps[(timeW, treasureW)] = hv_timesteps
         all_hv_points[(timeW, treasureW)] = hv_points
 
@@ -90,9 +90,9 @@ if RUN_MODE in ["owa", "all", "compare"]:
     all_hv_points_owa = {}
 
     for owa_w in owa_settings:
-        episode_points, hv_timesteps, hv_points = train_owa_q(
+        final_point, hv_timesteps, hv_points = train_owa_q(
             owa_weights=owa_w,
-            total_timesteps=200000,
+            total_timesteps=400000,
             lr=0.1,
             gamma=0.99,
             epsilon_start=1.0,
@@ -100,7 +100,7 @@ if RUN_MODE in ["owa", "all", "compare"]:
             log_interval=1000,
         )
 
-        all_episode_points_owa[owa_w] = episode_points
+        all_episode_points_owa[owa_w] = final_point
         all_hv_timesteps_owa[owa_w] = hv_timesteps
         all_hv_points_owa[owa_w] = hv_points
 
@@ -121,9 +121,9 @@ if RUN_MODE in ["cheb", "all", "compare"]:
     all_hv_points_cheb = {}
 
     for cheb_w in cheb_settings:
-        episode_points, hv_timesteps, hv_points = train_chebyshev_q(
+        final_point, hv_timesteps, hv_points = train_chebyshev_q(
             cheb_weights=cheb_w,
-            total_timesteps=200000,
+            total_timesteps=400000,
             lr=0.1,
             gamma=0.99,
             epsilon_start=1.0,
@@ -131,7 +131,7 @@ if RUN_MODE in ["cheb", "all", "compare"]:
             log_interval=1000,
         )
 
-        all_episode_points_cheb[cheb_w] = episode_points
+        all_episode_points_cheb[cheb_w] = final_point
         all_hv_timesteps_cheb[cheb_w] = hv_timesteps
         all_hv_points_cheb[cheb_w] = hv_points
 
@@ -149,7 +149,7 @@ if RUN_MODE in ["cheb", "all", "compare"]:
 
 if RUN_MODE in ["pql", "all", "compare"]:
     episode_points_pql, hv_timesteps_pql, hv_points_pql = train_pql(
-        total_timesteps=200000,
+        total_timesteps=400000,
         gamma=0.99,
         epsilon_start=1.0,
         epsilon_end=0.05,

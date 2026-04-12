@@ -11,58 +11,66 @@ def chebyshev_score(values, weights, ideal):
     return max(diffs)
 
 
-def evaluate_final_chebyshev_policy(env, Q1, Q2, cheb_weights):
+def evaluate_final_chebyshev_policy(env, Q1, Q2, cheb_weights, n_eval_episodes=1):
     # evaluate the final chebyshev policy after training
     # returns one point (time_cost, treasure) for pareto front construction
-    obs, info = env.reset()
-    done = False
+    total_times = []
+    total_treasures = []
 
-    total_time_cost = 0
-    final_treasure = 0.0
+    for _ in range(n_eval_episodes):
+        obs, info = env.reset()
+        done = False
 
-    while not done:
-        state = (int(obs[0]), int(obs[1]))
+        total_time_cost = 0
+        final_treasure = 0.0
 
-        # compute current ideal point (best possible q-values in this state)
-        ideal_time = max(Q1[state])
-        ideal_treasure = max(Q2[state])
-        ideal = [ideal_time, ideal_treasure]
+        while not done:
+            state = (int(obs[0]), int(obs[1]))
 
-        # compute chebyshev score for every action
-        action_scores = []
-        for a in range(4):
-            score = chebyshev_score(
-                values=[Q1[state][a], Q2[state][a]],
-                weights=cheb_weights,
-                ideal=ideal
-            )
-            action_scores.append(score)
+            # compute current ideal point (best possible q-values in this state)
+            ideal_time = max(Q1[state])
+            ideal_treasure = max(Q2[state])
+            ideal = [ideal_time, ideal_treasure]
 
-        # select action with the smallest chebyshev score (min-max approach)
-        action = int(np.argmin(action_scores))
+            # compute chebyshev score for every action
+            action_scores = []
+            for a in range(4):
+                score = chebyshev_score(
+                    values=[Q1[state][a], Q2[state][a]],
+                    weights=cheb_weights,
+                    ideal=ideal
+                )
+                action_scores.append(score)
 
-        next_obs, reward_vec, terminated, truncated, info = env.step(action)
+            # select action with the smallest chebyshev score (min-max approach)
+            action = int(np.argmin(action_scores))
 
-        treasure_reward = float(reward_vec[0])
+            next_obs, reward_vec, terminated, truncated, info = env.step(action)
 
-        total_time_cost += 1
-        final_treasure = max(final_treasure, treasure_reward)
+            treasure_reward = float(reward_vec[0])
 
-        obs = next_obs
-        done = terminated or truncated
+            total_time_cost += 1
+            final_treasure = max(final_treasure, treasure_reward)
+
+            obs = next_obs
+            done = terminated or truncated
+
+        total_times.append(total_time_cost)
+        total_treasures.append(final_treasure)
 
     # return format expected by plotting code: (time_cost, treasure)
-    return (total_time_cost, final_treasure)
+    return (float(np.mean(total_times)), float(np.mean(total_treasures)))
 
 
 def train_chebyshev_q(
     cheb_weights,
-    total_timesteps=200000,
+    total_timesteps=400000,
     lr=0.1,
     gamma=0.99,
     epsilon_start=1.0,
     epsilon_end=0.05,
     log_interval=1000,
+    n_eval_episodes=1,
 ):
     # create the concave deep sea treasure environment
     env = mo_gym.make("deep-sea-treasure-concave-v0")
@@ -75,9 +83,6 @@ def train_chebyshev_q(
     hv_points = []
     hv_timesteps = []
 
-    # temporary list used only for intermediate hypervolume calculation
-    current_solutions = []
-
     global_step = 0
     next_log_step = log_interval
 
@@ -85,9 +90,6 @@ def train_chebyshev_q(
     while global_step < total_timesteps:
         obs, info = env.reset()
         done = False
-
-        total_time_cost = 0
-        final_treasure = 0.0
 
         while not done and global_step < total_timesteps:
             state = (int(obs[0]), int(obs[1]))
@@ -127,9 +129,6 @@ def train_chebyshev_q(
             treasure_reward = float(reward_vec[0])
             time_reward = float(reward_vec[1])
 
-            total_time_cost += 1
-            final_treasure = max(final_treasure, treasure_reward)
-
             # compute ideal point for the next state
             next_ideal_time = max(Q1[next_state])
             next_ideal_treasure = max(Q2[next_state])
@@ -160,23 +159,25 @@ def train_chebyshev_q(
             obs = next_obs
             done = terminated or truncated
 
-        # store current episode result for hypervolume (negated time cost)
-        current_solutions.append((-total_time_cost, final_treasure))
-
         # log hypervolume at regular intervals
-        if global_step >= next_log_step:
-            hv = compute_hypervolume_2d(current_solutions, ref_point=(-100, 0))
-            hv_timesteps.append(global_step)
+        while global_step >= next_log_step:
+            eval_time_cost, eval_treasure = evaluate_final_chebyshev_policy(
+                env, Q1, Q2, cheb_weights, n_eval_episodes=n_eval_episodes
+            )
+            hv = compute_hypervolume_2d([(-eval_time_cost, eval_treasure)], ref_point=(-100, 0))
+            hv_timesteps.append(next_log_step)
             hv_points.append(hv)
             next_log_step += log_interval
 
-    #  final evaluation 
+    #  final evaluation
     # evaluate the final policy using chebyshev scalarization
-    final_time_cost, final_treasure = evaluate_final_chebyshev_policy(env, Q1, Q2, cheb_weights)
+    final_time_cost, final_treasure = evaluate_final_chebyshev_policy(
+        env, Q1, Q2, cheb_weights, n_eval_episodes=n_eval_episodes
+    )
 
     env.close()
 
     # return one final evaluated point (matches the new plotting structure)
-    final_point = [(final_time_cost, final_treasure)]
+    final_point = (final_time_cost, final_treasure)
 
     return final_point, hv_timesteps, hv_points

@@ -3,16 +3,58 @@ import numpy as np
 from utils import extract_pareto_front
 
 
-def _points_from_dict_points(all_episode_points_dict):
+def _points_from_dict_points(points_dict):
+    """
+    Accepts dict values in either of these forms:
+        weights -> (time_cost, treasure)
+    or
+        weights -> [(time_cost, treasure)]
+    or
+        weights -> [(time_cost, treasure), ...]
+    Converts them to maximization form: (-time_cost, treasure)
+    """
     points = []
-    for pts in all_episode_points_dict.values():
-        for time_cost, treasure in pts:
+
+    for value in points_dict.values():
+        if value is None:
+            continue
+
+        # Case 1: single point tuple like (time_cost, treasure)
+        if (
+            isinstance(value, tuple)
+            and len(value) == 2
+            and isinstance(value[0], (int, float, np.integer, np.floating))
+            and isinstance(value[1], (int, float, np.integer, np.floating))
+        ):
+            time_cost, treasure = value
             points.append((-time_cost, treasure))
+
+        # Case 2: list/tuple of points like [(time_cost, treasure), ...]
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                if (
+                    isinstance(item, (list, tuple))
+                    and len(item) == 2
+                ):
+                    time_cost, treasure = item
+                    points.append((-time_cost, treasure))
+
     return points
 
 
-def _points_from_list_points(episode_points_list):
-    return [(-time_cost, treasure) for time_cost, treasure in episode_points_list]
+def _points_from_list_points(points_list):
+    """
+    Accepts:
+        [(time_cost, treasure), ...]
+    Converts to:
+        [(-time_cost, treasure), ...]
+    """
+    points = []
+    for item in points_list:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            time_cost, treasure = item
+            points.append((-time_cost, treasure))
+    return points
 
 
 def _unique_points(points):
@@ -56,16 +98,17 @@ def plot_mo_q_results(all_episode_points, all_hv_timesteps, all_hv_points, weigh
     _plot_points_and_front(
         axes[0],
         all_points,
-        "MO Q-Learning: Final Policy Returns"
+        "MO Q-Learning: Final Frozen Policy Returns"
     )
 
     for weights in weights_list:
-        axes[1].plot(
-            all_hv_timesteps[weights],
-            all_hv_points[weights],
-            marker="o",
-            label=str(weights)
-        )
+        if weights in all_hv_timesteps and weights in all_hv_points:
+            axes[1].plot(
+                all_hv_timesteps[weights],
+                all_hv_points[weights],
+                marker="o",
+                label=str(weights)
+            )
 
     axes[1].set_xlabel("Timestep")
     axes[1].set_ylabel("Hypervolume")
@@ -85,16 +128,17 @@ def plot_owa_q_results(all_episode_points_owa, all_hv_timesteps_owa, all_hv_poin
     _plot_points_and_front(
         axes[0],
         all_points,
-        "OWA Q-Learning: Final Policy Returns"
+        "OWA Q-Learning: Final Frozen Policy Returns"
     )
 
     for owa_w in owa_settings:
-        axes[1].plot(
-            all_hv_timesteps_owa[owa_w],
-            all_hv_points_owa[owa_w],
-            marker="o",
-            label=str(owa_w)
-        )
+        if owa_w in all_hv_timesteps_owa and owa_w in all_hv_points_owa:
+            axes[1].plot(
+                all_hv_timesteps_owa[owa_w],
+                all_hv_points_owa[owa_w],
+                marker="o",
+                label=str(owa_w)
+            )
 
     axes[1].set_xlabel("Timestep")
     axes[1].set_ylabel("Hypervolume")
@@ -114,16 +158,17 @@ def plot_chebyshev_q_results(all_episode_points_cheb, all_hv_timesteps_cheb, all
     _plot_points_and_front(
         axes[0],
         all_points,
-        "Chebyshev Q-Learning: Final Policy Returns"
+        "Chebyshev Q-Learning: Final Frozen Policy Returns"
     )
 
     for cheb_w in cheb_settings:
-        axes[1].plot(
-            all_hv_timesteps_cheb[cheb_w],
-            all_hv_points_cheb[cheb_w],
-            marker="o",
-            label=str(cheb_w)
-        )
+        if cheb_w in all_hv_timesteps_cheb and cheb_w in all_hv_points_cheb:
+            axes[1].plot(
+                all_hv_timesteps_cheb[cheb_w],
+                all_hv_points_cheb[cheb_w],
+                marker="o",
+                label=str(cheb_w)
+            )
 
     axes[1].set_xlabel("Timestep")
     axes[1].set_ylabel("Hypervolume")
