@@ -11,6 +11,13 @@ from plots import (
     plot_pql_results,
     plot_all_comparisons,
 )
+from utils import (
+    expected_utility_metric,
+    dict_points_to_maximize,
+    list_points_to_maximize,
+    extract_pareto_front,
+    compute_hypervolume_2d,
+)
 
 RUN_MODE = sys.argv[1].lower() if len(sys.argv) > 1 else "mo"
 
@@ -144,13 +151,12 @@ if RUN_MODE in ["cheb", "all", "compare"]:
         )
 
 
-
 # pareto_q_learning
 
 if RUN_MODE in ["pql", "all", "compare"]:
     episode_points_pql, hv_timesteps_pql, hv_points_pql = train_pql(
         total_timesteps=400000,
-        gamma=0.99,
+        gamma=1.0,
         epsilon_start=1.0,
         epsilon_end=0.05,
         log_interval=1000,
@@ -162,7 +168,6 @@ if RUN_MODE in ["pql", "all", "compare"]:
             hv_timesteps_pql,
             hv_points_pql,
         )
-
 
 
 # all individual plots
@@ -196,8 +201,7 @@ if RUN_MODE == "all":
     )
 
 
-
-# combined comparison plot
+# combined comparison plot + fair final metrics
 
 if RUN_MODE == "compare":
     plot_all_comparisons(
@@ -217,3 +221,41 @@ if RUN_MODE == "compare":
         owa_settings,
         cheb_settings,
     )
+
+    # convert to maximization form
+    mo_points = dict_points_to_maximize(all_episode_points)
+    owa_points = dict_points_to_maximize(all_episode_points_owa)
+    cheb_points = dict_points_to_maximize(all_episode_points_cheb)
+    pql_points = list_points_to_maximize(episode_points_pql)
+
+    # final nondominated sets
+    mo_front = extract_pareto_front(mo_points)
+    owa_front = extract_pareto_front(owa_points)
+    cheb_front = extract_pareto_front(cheb_points)
+    pql_front = extract_pareto_front(pql_points)
+
+    # EUM on final nondominated sets
+    mo_eum = expected_utility_metric(mo_front, weights_list)
+    owa_eum = expected_utility_metric(owa_front, weights_list)
+    cheb_eum = expected_utility_metric(cheb_front, weights_list)
+    pql_eum = expected_utility_metric(pql_front, weights_list)
+
+    print("\nExpected Utility Metric (EUM):")
+    print(f"MO Q-Learning:        {mo_eum:.4f}")
+    print(f"OWA Q-Learning:       {owa_eum:.4f}")
+    print(f"Chebyshev Q-Learning: {cheb_eum:.4f}")
+    print(f"Pareto Q-Learning:    {pql_eum:.4f}")
+
+    # fair final hypervolume comparison on final nondominated sets
+    ref_point = (-100, 0)
+
+    mo_final_hv = compute_hypervolume_2d(mo_front, ref_point=ref_point)
+    owa_final_hv = compute_hypervolume_2d(owa_front, ref_point=ref_point)
+    cheb_final_hv = compute_hypervolume_2d(cheb_front, ref_point=ref_point)
+    pql_final_hv = compute_hypervolume_2d(pql_front, ref_point=ref_point)
+
+    print("\nHypervolume (nondominated sets):")
+    print(f"MO Q-Learning:        {mo_final_hv:.4f}")
+    print(f"OWA Q-Learning:       {owa_final_hv:.4f}")
+    print(f"Chebyshev Q-Learning: {cheb_final_hv:.4f}")
+    print(f"Pareto Q-Learning:    {pql_final_hv:.4f}")

@@ -68,3 +68,92 @@ def get_non_dominated(vectors):
         if not dominated_flag and v not in nd:
             nd.append(v)
     return nd
+
+
+def linear_utility(vec, weights):
+    """
+    vec and weights must both be length-2 tuples
+    vec must be in maximization form: (obj1, obj2)
+    """
+    return weights[0] * vec[0] + weights[1] * vec[1]
+
+
+def expected_utility_metric(point_set, weight_list):
+    """
+    point_set: list of points in maximization form
+               example: [(-time_cost, treasure), ...]
+    weight_list: list of preference weights
+                 example: [(0.9, 0.1), (0.8, 0.2), ...]
+
+    Computes:
+        average_w [ max_p u(p, w) ]
+    """
+    if not point_set:
+        return 0.0
+
+    best_utilities = []
+    for w in weight_list:
+        best_u = max(linear_utility(p, w) for p in point_set)
+        best_utilities.append(best_u)
+
+    return float(np.mean(best_utilities))
+
+
+def dict_points_to_maximize(points_dict):
+    """
+    Converts dict values like:
+        weights -> (time_cost, treasure)
+    or
+        weights -> [(time_cost, treasure), ...]
+    into:
+        [(-time_cost, treasure), ...]
+    """
+    points = []
+
+    for value in points_dict.values():
+        if value is None:
+            continue
+
+        if (
+            isinstance(value, tuple)
+            and len(value) == 2
+            and isinstance(value[0], (int, float, np.integer, np.floating))
+            and isinstance(value[1], (int, float, np.integer, np.floating))
+        ):
+            time_cost, treasure = value
+            points.append((-time_cost, treasure))
+
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                if (
+                    isinstance(item, (list, tuple))
+                    and len(item) == 2
+                    and isinstance(item[0], (int, float, np.integer, np.floating))
+                    and isinstance(item[1], (int, float, np.integer, np.floating))
+                ):
+                    time_cost, treasure = item
+                    points.append((-time_cost, treasure))
+
+    return points
+
+
+def list_points_to_maximize(points_list):
+    """
+    Converts:
+        [(time_cost, treasure), ...]
+    into:
+        [(-time_cost, treasure), ...]
+    """
+    points = []
+
+    for item in points_list:
+        if (
+            isinstance(item, (list, tuple))
+            and len(item) == 2
+            and isinstance(item[0], (int, float, np.integer, np.floating))
+            and isinstance(item[1], (int, float, np.integer, np.floating))
+        ):
+            time_cost, treasure = item
+            points.append((-time_cost, treasure))
+
+    return points
