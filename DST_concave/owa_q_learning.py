@@ -1,165 +1,147 @@
+"""
+owa_q_learning.py
+=================
+OWA Q-Learning: Ordered Weighted Averaging scalarisation.
+
+OWA sorts objective values before applying weights,
+so the weight attaches to the rank (best, worst) rather than a fixed objective.
+This produces more balanced solutions and can reach some concave front regions.
+
+OWA([v1, v2], [w1, w2]) = w1 * max(v1, v2) + w2 * min(v1, v2)
+
+Coordinate convention
+---------------------
+    rew[0] = treasure  (positive, maximise)
+    rew[1] = time_ret  (negative = -steps, maximise)
+    Evaluation returns (time_cost=steps, treasure).
+    Metrics logged in maximisation form: (-steps, treasure).
+"""
+
 import mo_gymnasium as mo_gym
 import numpy as np
 from collections import defaultdict
-from utils import compute_hypervolume_2d
+from utils import compute_hypervolume_2d, compute_igd, compute_epsilon_indicator
+from env import get_true_reference_pf
 
 
-def owa_score(values, owa_weights):
+# =============================================================================
+# OWA scalarisation
+# =============================================================================
 
-    """ Computes the Ordered Weighted Averaging (OWA) scalarization.
-        Sorts the values in descending order and applies the weights."""
-    
-    # Sort the input values (e.g., Q1 and Q2) from highest to lowest
-    vals = sorted(values, reverse=True)
-    
-    # Compute weighted sum: highest value gets the first weight, etc.
-    # This allows emphasizing either the best or the worst objective.
-    return sum(w * v for w, v in zip(owa_weights, vals))
-
-
-def evaluate_final_owa_policy(env, Q1, Q2, owa_weights, n_eval_episodes=1):
+def _owa(values, weights):
     """
-    Evaluates the final OWA policy after training.
-    Uses OWA scalarization on the two Q-tables to select actions.
-    Returns one final point (time_cost, treasure) for Pareto front construction.
+    Ordered Weighted Averaging: sort values descending, then dot with weights.
+    weights[0] applies to the largest value, weights[1] to the smallest.
     """
-    total_times = []
-    total_treasures = []
+    return sum(w * v for w, v in zip(weights, sorted(values, reverse=True)))
 
-    for _ in range(n_eval_episodes):
-        obs, info = env.reset()
+
+def _best_action(Q1, Q2, state, weights):
+    """Greedy action: argmax OWA([Q1[s,a], Q2[s,a]], weights)."""
+    return int(np.argmax([
+        _owa([Q1[state][a], Q2[state][a]], weights)
+        for a in range(4)
+    ]))
+
+
+# =============================================================================
+# Policy evaluation
+# =============================================================================
+
+def _evaluate(env, Q1, Q2, weights, n_eval=10):
+    """
+    Run the greedy OWA policy for n_eval episodes.
+    Returns (mean_time_cost, mean_treasure).
+    """
+    times, treasures = [], []
+    for _ in range(n_eval):
+        obs, _ = env.reset()
         done = False
-
-        total_time_cost = 0
-        final_treasure = 0.0
-
+        steps, treasure = 0, 0.0
         while not done:
-            state = (int(obs[0]), int(obs[1]))
+            state  = (int(obs[0]), int(obs[1]))
+            action = _best_action(Q1, Q2, state, weights)
+            obs, rew, terminated, truncated, _ = env.step(action)
+            treasure = float(rew[0])
+            steps   += 1
+            done     = terminated or truncated
+        times.append(steps)
+        treasures.append(treasure)
+    return float(np.mean(times)), float(np.mean(treasures))
 
-            # compute OWA score for every possible action using current Q1 and Q2
-            action_scores = []
-            for a in range(4):
-                score = owa_score([Q1[state][a], Q2[state][a]], owa_weights)
-                action_scores.append(score)
 
-            # choose the action with the highest OWA score (greedy policy)
-            action = int(np.argmax(action_scores))
-
-            next_obs, reward_vec, terminated, truncated, info = env.step(action)
-
-            treasure_reward = float(reward_vec[0])   # reward_vec[0] = treasure
-
-            total_time_cost += 1
-            final_treasure = max(final_treasure, treasure_reward)
-
-            obs = next_obs
-            done = terminated or truncated
-
-        total_times.append(total_time_cost)
-        total_treasures.append(final_treasure)
-
-    # return format expected by plotting code: (time_cost, treasure)
-    return (float(np.mean(total_times)), float(np.mean(total_treasures)))
-
+# =============================================================================
+# Training
+# =============================================================================
 
 def train_owa_q(
     owa_weights,
-    total_timesteps=400000,
-    lr=0.1,
-    gamma=0.99,
-    epsilon_start=1.0,
-    epsilon_end=0.05,
-    log_interval=1000,
-    n_eval_episodes=1,
+    total_timesteps = 400_000,
+    lr              = 0.1,
+    gamma           = 0.99,
+    epsilon_start   = 1.0,
+    epsilon_end     = 0.05,
+    log_interval    = 1_000,
+    n_eval          = 10,
 ):
-    """Trains an OWA Q-Learning agent.
-       Uses Ordered Weighted Averaging instead of linear weights.
-       Returns one final evaluated point per OWA weight setting."""
-    
-    env = mo_gym.make("deep-sea-treasure-concave-v0")
+    """
+    Train OWA Q-Learning with a fixed OWA weight vector.
 
-    # Separate Q-tables for each objective
-    Q1 = defaultdict(lambda: np.zeros(4))   # time objective
+    Returns: (final_point, hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts)
+        final_point - (time_cost, treasure) in training form
+    """
+    env     = mo_gym.make("deep-sea-treasure-concave-v0")
+    true_pf = get_true_reference_pf()   # maximisation form
+
+    Q1 = defaultdict(lambda: np.zeros(4))   # time_ret objective
     Q2 = defaultdict(lambda: np.zeros(4))   # treasure objective
 
-    # lists for hypervolume logging during training
-    hv_points = []
-    hv_timesteps = []
+    hv_timesteps,  hv_points  = [], []
+    igd_timesteps, igd_points = [], []
+    eps_timesteps, eps_points = [], []
 
-    global_step = 0
-    next_log_step = log_interval
+    global_step, next_log = 0, log_interval
 
-    # training loop
     while global_step < total_timesteps:
-        obs, info = env.reset()
-        done = False
+        obs, _ = env.reset()
+        done   = False
 
         while not done and global_step < total_timesteps:
-            state = (int(obs[0]), int(obs[1]))
+            state   = (int(obs[0]), int(obs[1]))
+            epsilon = max(epsilon_end,
+                          epsilon_start - (epsilon_start - epsilon_end)
+                          * global_step / total_timesteps)
 
-            # linear epsilon decay
-            epsilon = max(
-                epsilon_end,
-                epsilon_start - (epsilon_start - epsilon_end) * (global_step / total_timesteps)
-            )
+            action = (env.action_space.sample() if np.random.rand() < epsilon
+                      else _best_action(Q1, Q2, state, owa_weights))
 
-            # epsilon-greedy using OWA scalarization on Q-values
-            if np.random.rand() < epsilon:
-                action = env.action_space.sample()
-            else:
-                action_scores = []
-                for a in range(4):
-                    score = owa_score([Q1[state][a], Q2[state][a]], owa_weights)
-                    action_scores.append(score)
-                action = int(np.argmax(action_scores))
-
-            # take action
-            next_obs, reward_vec, terminated, truncated, info = env.step(action)
+            next_obs, rew, terminated, truncated, _ = env.step(action)
             global_step += 1
+            done        = terminated or truncated
+            next_state  = (int(next_obs[0]), int(next_obs[1]))
 
-            next_state = (int(next_obs[0]), int(next_obs[1]))
+            treasure  = float(rew[0])
+            time_r    = float(rew[1])
+            best_next = _best_action(Q1, Q2, next_state, owa_weights)
 
-            treasure_reward = float(reward_vec[0])
-            time_reward = float(reward_vec[1])
-
-            # we compute OWA scores again for the next state to choose the best next action
-            next_action_scores = []
-            for a in range(4):
-                score = owa_score([Q1[next_state][a], Q2[next_state][a]], owa_weights)
-                next_action_scores.append(score)
-            best_next_action = int(np.argmax(next_action_scores))
-
-            # Update Q1 (time objective) using OWA-selected next action
-            Q1[state][action] = Q1[state][action] + lr * (
-                time_reward + gamma * Q1[next_state][best_next_action] - Q1[state][action]
-            )
-
-            # Update Q2 (treasure objective) using OWA-selected next action
-            Q2[state][action] = Q2[state][action] + lr * (
-                treasure_reward + gamma * Q2[next_state][best_next_action] - Q2[state][action]
-            )
+            Q1[state][action] += lr * (time_r   + gamma * Q1[next_state][best_next] - Q1[state][action])
+            Q2[state][action] += lr * (treasure + gamma * Q2[next_state][best_next] - Q2[state][action])
 
             obs = next_obs
-            done = terminated or truncated
 
-        # Log hypervolume at regular intervals
-        while global_step >= next_log_step:
-            eval_time_cost, eval_treasure = evaluate_final_owa_policy(
-                env, Q1, Q2, owa_weights, n_eval_episodes=n_eval_episodes
-            )
-            hv = compute_hypervolume_2d([(-eval_time_cost, eval_treasure)], ref_point=(-100, 0))
-            hv_timesteps.append(next_log_step)
-            hv_points.append(hv)
-            next_log_step += log_interval
+            while global_step >= next_log:
+                tc, tr   = _evaluate(env, Q1, Q2, owa_weights, n_eval)
+                pt_max   = (-tc, tr)   # maximisation form
 
-    # evaluate the final policy using OWA scalarization
-    final_time_cost, final_treasure = evaluate_final_owa_policy(
-        env, Q1, Q2, owa_weights, n_eval_episodes=n_eval_episodes
-    )
+                hv_timesteps.append(next_log)
+                hv_points.append(compute_hypervolume_2d([pt_max], ref_point=(-100, 0)))
+                igd_timesteps.append(next_log)
+                igd_points.append(compute_igd(true_pf, [pt_max]))
+                eps_timesteps.append(next_log)
+                eps_points.append(compute_epsilon_indicator(true_pf, [pt_max]))
 
+                next_log += log_interval
+
+    tc, tr = _evaluate(env, Q1, Q2, owa_weights, n_eval)
     env.close()
-
-    # return one final evaluated point per OWA weight setting, along with hypervolume logs
-    final_point = (final_time_cost, final_treasure)
-
-    return final_point, hv_timesteps, hv_points
+    return (tc, tr), hv_timesteps, hv_points, igd_timesteps, igd_points, eps_timesteps, eps_points

@@ -1,190 +1,177 @@
+"""
+pareto_q_learning.py
+====================
+Pareto Q-Learning (PQL) for multi-objective RL.
+
+Maintains a set of non-dominated value vectors per (state, action) pair.
+A single run produces an approximation of the full Pareto front.
+
+Internal coordinate form: (treasure, time_ret)
+    treasure  = rew[0]  positive float
+    time_ret  = rew[1]  negative float = -time_cost
+
+All metrics computed in maximisation form (-time_cost, treasure)
+via _front_to_max(), consistent with all other algorithms and utils.py.
+"""
+
 import mo_gymnasium as mo_gym
 import numpy as np
 from collections import defaultdict
-from utils import get_non_dominated
+from utils import (
+    get_non_dominated,
+    compute_hypervolume_2d,
+    compute_igd,
+    compute_epsilon_indicator,
+)
+from env import get_true_reference_pf
+
+MAX_POINTS = 50
 
 
-def compute_hv_for_vector_set(vectors, ref_point=(0.0, -100.0)):
-    """
-    Hypervolume for vectors stored as:
-        (treasure_return, time_return)
+# =============================================================================
+# Vector-set helpers
+# =============================================================================
 
-    Both objectives are maximized.
-    In DST:
-        treasure_return >= 0
-        time_return <= 0   (because each step gives -1)
-
-    ref_point is in the same coordinate system:
-        (treasure_ref, time_ref)
-    """
-    if not vectors:
-        return 0.0
-
-    nd = get_non_dominated(vectors)
-    nd = sorted(nd, key=lambda p: p[0])  # sort by treasure
-
-    hv = 0.0
-    prev_x = ref_point[0]
-
-    for x, y in nd:
-        width = x - prev_x
-        height = y - ref_point[1]
-        if width > 0 and height > 0:
-            hv += width * height
-        prev_x = x
-
-    return hv
+def _prune(nd):
+    """Limit Pareto set to MAX_POINTS while preserving spread."""
+    if len(nd) <= MAX_POINTS:
+        return nd
+    nd_sorted = sorted(nd, key=lambda p: p[0])
+    idx = np.linspace(0, len(nd_sorted) - 1, MAX_POINTS).astype(int)
+    return [nd_sorted[i] for i in idx]
 
 
-def add_vector_to_set(immediate_reward, future_set, gamma):
-    """
-    immediate_reward: (treasure_reward, time_reward)
-    future_set: list of future return vectors
-    """
+def _propagate(immediate, future_nd, gamma):
+    """Bellman backup: immediate + gamma * each future vector."""
+    return [(immediate[0] + gamma * f[0],
+             immediate[1] + gamma * f[1]) for f in future_nd]
+
+
+def _all_vectors(Q_sets, state, n_actions):
     out = []
-    for vec in future_set:
-        out.append((
-            immediate_reward[0] + gamma * vec[0],
-            immediate_reward[1] + gamma * vec[1],
-        ))
+    for a in range(n_actions):
+        out.extend(Q_sets[state][a])
     return out
 
 
-def get_state(obs):
-    return (int(obs[0]), int(obs[1]))
+def _front_at_state(Q_sets, state, n_actions):
+    return get_non_dominated(_all_vectors(Q_sets, state, n_actions))
 
 
-def get_all_vectors_at_state(Q_sets, state, num_actions):
-    all_vectors = []
-    for a in range(num_actions):
-        all_vectors.extend(Q_sets[state][a])
-    return all_vectors
-
-
-def get_front_at_state(Q_sets, state, num_actions):
-    all_vectors = get_all_vectors_at_state(Q_sets, state, num_actions)
-    return get_non_dominated(all_vectors)
-
-
-def convert_vectors_to_plot_points(vectors, round_digits=8):
+def _front_to_max(vectors):
     """
-    Convert internal vectors:
-        (treasure_return, time_return)
-    into plot points:
-        (time_cost, treasure_value)
-
-    So plotting code can still use:
-        x = -time_cost
-        y = treasure_value
-
-    IMPORTANT:
-    This matches real time cost / treasure cleanly when gamma = 1.0.
+    Internal (treasure, time_ret) -> maximisation form (time_ret, treasure).
+    time_ret is already negative = -time_cost, so this is a coordinate swap.
     """
-    points = []
-    seen = set()
+    return [(float(t), float(tr)) for tr, t in vectors]
 
-    for treasure_ret, time_ret in vectors:
-        time_cost = -time_ret
-        treasure_value = treasure_ret
 
-        key = (round(time_cost, round_digits), round(treasure_value, round_digits))
-        if key not in seen:
-            seen.add(key)
-            points.append((float(time_cost), float(treasure_value)))
+# =============================================================================
+# Action selection
+# =============================================================================
 
-    # sort by time cost
-    points.sort(key=lambda p: p[0])
-    return points
+def _best_action(Q_sets, state, n_actions):
+    """
+    PQL greedy: pick action whose Q-set contributes the most vectors to the
+    global non-dominated set at this state. 
+    """
+    all_vecs  = _all_vectors(Q_sets, state, n_actions)
+    global_nd = set(map(tuple, get_non_dominated(all_vecs)))
 
+    best_a, best_count, best_size = 0, -1, -1
+    for a in range(n_actions):
+        count = sum(1 for v in Q_sets[state][a] if tuple(v) in global_nd)
+        size  = len(Q_sets[state][a])
+        if count > best_count or (count == best_count and size > best_size):
+            best_a, best_count, best_size = a, count, size
+    return best_a
+
+
+# =============================================================================
+# Training
+# =============================================================================
 
 def train_pql(
-    total_timesteps=400000,
-    gamma=1.0,              # keep 1.0 for DST if you want exact time_cost / treasure points
-    epsilon_start=1.0,
-    epsilon_end=0.05,
-    log_interval=1000,
+    total_timesteps = 400_000,
+    gamma           = 1.0,
+    epsilon_start   = 1.0,
+    epsilon_end     = 0.05,
+    log_interval    = 5_000,
 ):
-    """
-    Correct PQL training:
-    - learns set-valued Q sets
-    - logs hypervolume of the learned Pareto front at the START STATE
-    - returns ALL learned final vectors from the START STATE for plotting
-    """
+    env       = mo_gym.make("deep-sea-treasure-concave-v0")
+    n_actions = env.action_space.n
+    true_pf   = get_true_reference_pf()
 
-    env = mo_gym.make("deep-sea-treasure-concave-v0")
-    num_actions = env.action_space.n
-
-    # start state
     start_obs, _ = env.reset()
-    start_state = get_state(start_obs)
+    start_state  = (int(start_obs[0]), int(start_obs[1]))
 
-    # Q_sets[state][action] = list of non-dominated vectors
-    Q_sets = defaultdict(lambda: [[(0.0, 0.0)] for _ in range(num_actions)])
+    Q_sets = defaultdict(lambda: [[(0.0, 0.0)] for _ in range(n_actions)])
 
-    hv_timesteps = []
-    hv_points = []
+    hv_timesteps,  hv_points  = [], []
+    igd_timesteps, igd_points = [], []
+    eps_timesteps, eps_points = [], []
 
-    global_step = 0
-    next_log_step = log_interval
+    global_step, next_log = 0, log_interval
 
     while global_step < total_timesteps:
         obs, _ = env.reset()
-        done = False
+        done   = False
 
         while not done and global_step < total_timesteps:
-            state = get_state(obs)
+            state   = (int(obs[0]), int(obs[1]))
+            epsilon = max(epsilon_end,
+                          epsilon_start - (epsilon_start - epsilon_end)
+                          * global_step / total_timesteps)
 
-            epsilon = max(
-                epsilon_end,
-                epsilon_start - (epsilon_start - epsilon_end) * (global_step / total_timesteps)
-            )
-
-            # epsilon-greedy over action-set hypervolume
+            # Epsilon-greedy: random vs set-theoretic ND-contribution rule
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
             else:
-                action_scores = [
-                    compute_hv_for_vector_set(Q_sets[state][a], ref_point=(0.0, -100.0))
-                    for a in range(num_actions)
-                ]
-                action = int(np.argmax(action_scores))
+                action = _best_action(Q_sets, state, n_actions)
 
-            next_obs, reward_vec, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-            next_state = get_state(next_obs)
-
-            immediate_reward = (float(reward_vec[0]), float(reward_vec[1]))
-
-            # terminal state -> no future return except zero vector
-            if done:
-                future_nd = [(0.0, 0.0)]
-            else:
-                future_candidates = get_all_vectors_at_state(Q_sets, next_state, num_actions)
-                future_nd = get_non_dominated(future_candidates)
-
-            new_vectors = add_vector_to_set(immediate_reward, future_nd, gamma)
-
-            # keep non-dominated vectors for this state-action
-            Q_sets[state][action] = get_non_dominated(new_vectors)
-
-            obs = next_obs
+            next_obs, rew, terminated, truncated, _ = env.step(action)
+            done        = terminated or truncated
+            next_state  = (int(next_obs[0]), int(next_obs[1]))
             global_step += 1
 
-            # log HV from the learned front at the START STATE
-            while global_step >= next_log_step:
-                start_front = get_front_at_state(Q_sets, start_state, num_actions)
-                hv = compute_hv_for_vector_set(start_front, ref_point=(0.0, -100.0))
+            immediate = (float(rew[0]), float(rew[1]))   # (treasure, time_ret)
 
-                hv_timesteps.append(next_log_step)
-                hv_points.append(hv)
+            future_nd = ([(0.0, 0.0)] if done
+                         else get_non_dominated(
+                             _all_vectors(Q_sets, next_state, n_actions)))
 
-                next_log_step += log_interval
+            new_set = get_non_dominated(_propagate(immediate, future_nd, gamma))
+            Q_sets[state][action] = _prune(new_set)
 
-    # FINAL learned vectors from the start state
-    final_vectors = get_all_vectors_at_state(Q_sets, start_state, num_actions)
+            obs = next_obs
 
-    # convert to (time_cost, treasure) for your existing plotting code
-    final_points = convert_vectors_to_plot_points(final_vectors)
+            if global_step % 10_000 == 0:
+                print(f"  [PQL] step {global_step:,}")
+
+            # Logging: all metrics via shared utils functions, maximisation form
+            while global_step >= next_log:
+                front     = _front_at_state(Q_sets, start_state, n_actions)
+                front_max = _front_to_max(front)
+
+                hv_timesteps.append(next_log)
+                hv_points.append(compute_hypervolume_2d(front_max, ref_point=(-100, 0)))
+                igd_timesteps.append(next_log)
+                igd_points.append(compute_igd(true_pf, front_max))
+                eps_timesteps.append(next_log)
+                eps_points.append(compute_epsilon_indicator(true_pf, front_max))
+
+                next_log += log_interval
+
+    # Final front in (time_cost, treasure) form expected by plot_pql_results
+    final_vectors = _all_vectors(Q_sets, start_state, n_actions)
+    nd            = get_non_dominated(final_vectors)
+    final_points  = sorted(
+        set((float(-t), float(tr)) for tr, t in nd),
+        key=lambda p: p[0],
+    )
 
     env.close()
-    return final_points, hv_timesteps, hv_points
+    return (final_points,
+            hv_timesteps, hv_points,
+            igd_timesteps, igd_points,
+            eps_timesteps, eps_points)

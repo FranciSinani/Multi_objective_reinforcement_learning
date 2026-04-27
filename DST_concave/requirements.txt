@@ -1,4 +1,5 @@
-mo-gymnasium
+mo-gymnasium[deep-sea-treasure]
 gymnasium
 numpy
 matplotlib
+pymoo

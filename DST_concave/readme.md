@@ -1,134 +1,178 @@
-# Multi-Objective Reinforcement Learning on Deep Sea Treasure Concave
+# Multi-Objective Reinforcement Learning — Deep Sea Treasure (Concave)
 
 ## Overview
 
-In this project, I explored several multi-objective reinforcement learning approaches on the **Deep Sea Treasure Concave** environment from **MO-Gymnasium**.
+This project implements and compares four multi-objective reinforcement learning (MORL) algorithms on the **Deep Sea Treasure Concave** environment from [MO-Gymnasium].
 
-My goal was to compare how different algorithms handle the trade-off between:
+The agent controls a submarine navigating a grid. At each cell the agent can collect a treasure. The two conflicting objectives are:
 
-- **treasure value** (which I want to maximize)
-- **time cost** (which I want to minimize)
+| Objective | Goal | Notes |
+|-----------|------|-------|
+| **Treasure value** | Maximise | Larger treasures are deeper in the grid |
+| **Time cost** | Minimise | Every step costs one time unit |
 
-To keep the comparison consistent, I represented the final solutions in objective space using:
-
-- **x-axis = - time cost**
-- **y-axis = treasure value**
-
-This way, both objectives are treated in a maximization style when I plot Pareto fronts and compute hypervolume.
+Because larger treasures require more steps to reach, there is no single "best" solution. Instead there is a **Pareto front** of trade-off solutions. The goal of each algorithm is to approximate this front as well as possible.
 
 ---
 
-I implemented and compared four approaches:
+## Algorithms
 
-### 1. MO Q-Learning
-In this version, I learned two separate Q-value tables:
+### 1. MO Q-Learning (`mo_q_learning.py`)
+Learns two separate Q-tables — one per objective — then combines them with a **weighted sum** during action selection:
 
-- one for the **time objective**
-- one for the **treasure objective**
+```
+Q[s,a] = w_time * Q1[s,a] + w_treasure * Q2[s,a]
+```
 
-Then I combined them with a standard weighted sum during action selection. This let me test different preference settings, such as giving more importance to time or more importance to treasure.
-
----
-
-### 2. OWA Q-Learning
-In this version, I still learned separate Q-values for each objective, but instead of using a simple weighted sum, I used an **Ordered Weighted Averaging (OWA)** utility function. It does not attach weights directly to fixed objectives. Instead, it sorts the objective values first and then applies the weights. Because of that, I could make the algorithm care more about the better objective or the worse objective, depending on the chosen OWA setting.
+Run 9 times with different weight vectors. Each run finds one point on the front.  
+**Limitation:** weighted sum can only reach convex parts of the Pareto front.
 
 ---
 
-### 3. Chebyshev Q-Learning
-In this version, I used a **Chebyshev scalarization** method. Instead of averaging objectives, I made the algorithm focus on the **largest weighted deviation from an ideal point**. This helped me study a different kind of compromise-seeking behavior, especially when I wanted to avoid solutions that are too weak in one objective.
+### 2. OWA Q-Learning (`owa_q_learning.py`)
+Uses **Ordered Weighted Averaging** — sorts the objective Q-values before applying weights, so the weight attaches to the rank rather than to a fixed objective:
+
+```
+OWA([v1, v2], [w1, w2]) = w1 * max(v1,v2) + w2 * min(v1,v2)
+```
+
+Run 9 times. Produces solutions that are more balanced than weighted sum.
 
 ---
 
-### 4. Pareto Q-Learning
-This was the most directly multi-objective method. Instead of reducing the objectives to one scalar during learning, I kept **sets of non-dominated value vectors** for state-action pairs. Then I used those sets to build policies that approximate the Pareto front more directly. This method is especially useful when preferences of the decision maker or system are unknown.
+### 3. Chebyshev Q-Learning (`chebyshev_q_learning.py`)
+Uses **Chebyshev scalarisation** — minimises the maximum weighted deviation from an ideal point:
+
+```
+Cheb([v1,v2], w, z) = max_i( w_i * |v_i - z_i| )
+```
+
+The ideal point `z` is updated online. The L-shaped contours of this function can theoretically reach **any** point on the Pareto front, including concave regions that weighted sum misses.  
+Run 9 times with different weight vectors.
 
 ---
 
-## Environment
-
-I used:
-
-- **MO-Gymnasium**
-- environment: **`deep-sea-treasure-concave-v0`**
-
-This environment is a good benchmark for MORL because it contains a clear trade-off:
-
-- small treasures can be reached quickly
-- larger treasures require more time
-
-The concave version is interesting because it highlights the limitations of scalarization methods on **non-convex Pareto fronts**.
+### 4. Pareto Q-Learning (`pareto_q_learning.py`)
+Keeps **sets of non-dominated value vectors** per state-action pair instead of scalar Q-values. No scalarisation is used during learning. A single run produces an approximation of the **full** Pareto front. Action selection uses hypervolume as the greedy criterion.
 
 ---
 
-## Evaluation
+## Metrics
 
-I evaluated the algorithms in two main ways.
+Three metrics are tracked during training and reported at the end:
 
-### Pareto Front
-I plotted the solutions in objective space using:
+| Metric | Formula | Direction | What it measures |
+|--------|---------|-----------|-----------------|
+| **HV** — Hypervolume | Area dominated by solution set, bounded by a reference point | Higher = better | Convergence + spread + coverage in one number |
+| **IGD** — Inverted Generational Distance | Average distance from each true front point to its nearest learned point | Lower = better | How well the learned front covers the true front |
+| **ε** — Additive Epsilon Indicator | Minimum shift needed so learned front dominates true front | Lower = better | Worst-case gap between learned and true front |
 
-- **x = - time cost**
-- **y = treasure value**
+At the end of `compare` mode, **EUM** (Expected Utility Metric) is also reported:
 
-Then I extracted the non-dominated points to visualize the Pareto front approximation learned by each method.
-
-### Hypervolume metric
-I also computed **hypervolume over timesteps**. It gives a single metric that reflects both:
-
-- the quality of the solutions
-- the coverage of the Pareto front
-
-This made it useful for comparing the algorithms over time.
+| Metric | What it measures |
+|--------|-----------------|
+| **EUM** — Expected Utility | Average best linear utility across all weight vectors; higher = better |
 
 ---
 
-## The comparison
+## Output Files
 
-The scalarization-based methods:
+### Per-algorithm (4 images per algorithm)
 
-- MO Q-Learning
-- OWA Q-Learning
-- Chebyshev Q-Learning
+Running `python main.py mo` (or `owa`, `cheb`, `pql`) saves:
 
-all need some kind of preference during learning. For those methods, I ran multiple settings and then collected the discovered solutions into a set.
-Pareto Q-Learning was different because it did not require fixed preferences during learning. It directly learned a set of trade-off solutions.
-To compare them fairly, I compared the **solution sets they produced**, rather than trying to force them to use the same preference structure.
+```
+results/
+├── mo_pareto_front.png    ← Learned front vs true front
+├── mo_hv.png              ← HV over time  +  HV staircase in objective space
+├── mo_igd.png             ← IGD over time  +  distance arrows in objective space
+└── mo_epsilon.png         ← Epsilon over time  +  shift visualisation
+```
+
+Same structure for `owa_`, `cheb_`, `pql_`.
+
+### Comparison (4 images)
+
+Running `python main.py compare` saves:
+
+```
+results/
+├── comparison_hv.png      ← HV over time, all 4 algorithms on one plot
+├── comparison_hv_obj.png  ← HV staircase view, all 4 final fronts together
+├── comparison_igd.png     ← IGD over time, all 4 algorithms on one plot
+└── comparison_epsilon.png ← Epsilon over time, all 4 algorithms on one plot
+```
+
+> **Note:** The Pareto-front panel is intentionally not included in the comparison output. Each algorithm's front is already available in its own dedicated `*_pareto_front.png` image.
 
 ---
 
 ## File Structure
 
-```text
-.
-├── main.py
-├── utils.py
-├── plots.py
-├── mo_q_learning.py
-├── owa_q_learning.py
-├── chebyshev_q_learning.py
-└── pareto_q_learning.py
 ```
+.
+├── main.py                   Entry point — controls which algorithms run
+├── utils.py                  HV, IGD, Epsilon, EUM, dominance helpers
+├── env.py                    Loads the true Pareto front from MO-Gymnasium
+├── plots.py                  All plotting — separated images per metric
+├── mo_q_learning.py          MO Q-Learning training
+├── owa_q_learning.py         OWA Q-Learning training
+├── chebyshev_q_learning.py   Chebyshev Q-Learning training
+├── pareto_q_learning.py      Pareto Q-Learning training
+├── requirements.txt          Python dependencies
+└── results/                  All saved plots (created automatically)
+```
+
 ---
-## Running the project 
 
-Install the requirements: 
+## How to Run
 
-- pip install -r requirements.txt
+**Install dependencies (once):**
+```bash
+pip install -r requirements.txt
+```
 
-To run one algorithm only: 
+**Run one algorithm:**
+```bash
+python main.py mo      # MO Q-Learning
+python main.py owa     # OWA Q-Learning
+python main.py cheb    # Chebyshev Q-Learning
+python main.py pql     # Pareto Q-Learning
+```
 
-- python main.py mo 
-- python main.py owa 
-- python main.py cheb 
-- python main.py pql 
+**Run all algorithms with individual plots:**
+```bash
+python main.py all
+```
 
-To run all algorithms: 
+**Run all algorithms with comparison plots and final metrics table:**
+```bash
+python main.py compare
+```
 
-- python main.py all 
+---
 
-To run the combined comparison plot: 
+## Expected Results
 
-- python main.py compare
+| Algorithm | HV | IGD | Epsilon | Notes |
+|-----------|-----|-----|---------|-------|
+| MO Q-Learning | Medium | High | High | Misses concave regions |
+| OWA Q-Learning | Medium | Medium | Medium | Better balance than weighted sum |
+| Chebyshev Q-Learning | Medium–High | Medium | Medium | Reaches some concave regions |
+| Pareto Q-Learning | **Highest** | **Lowest** | **Lowest** | Full front in one run |
 
+PQL is expected to achieve the best metrics because it learns the full Pareto front without any fixed preference. The scalarisation methods are limited by the number and diversity of weight settings used.
 
+---
+
+## Coordinate Convention
+
+All algorithms internally use different representations. Everything is converted to **maximisation form** before plotting and metric computation:
+
+```
+Internal training form:  (time_cost, treasure)
+Maximisation form:       (-time_cost, treasure)   [both axes: larger = better]
+Plot axes:               x = -Time Cost,  y = Treasure Value
+```
+
+The HV reference point is `(-100, 0)` in maximisation form.

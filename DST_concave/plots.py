@@ -1,311 +1,648 @@
+"""
+plots.py
+========
+Plotting module for all MORL experiments.
+
+Output structure per algorithm (e.g. "mo"):
+    results/mo_pareto_front.png   – learned front vs true front
+    results/mo_hv.png             – HV over time  +  objective-space staircase
+    results/mo_igd.png            – IGD over time  +  arrow visualisation
+    results/mo_epsilon.png        – Epsilon over time  +  shift visualisation
+
+Comparison output (python main.py compare):
+    results/comparison_hv.png     – HV over time for all 4 algorithms
+    results/comparison_hv_obj.png – HV objective-space view (final front, staircase)
+    results/comparison_igd.png    – IGD over time for all 4 algorithms
+    results/comparison_epsilon.png– Epsilon over time for all 4 algorithms
+"""
+
+import os
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import numpy as np
-from utils import extract_pareto_front
+
+from env   import get_true_reference_pf
+from utils import extract_pareto_front, compute_hypervolume_2d
+
+os.makedirs("results", exist_ok=True)
+
+# Shared visual constants
+_DPI      = 150
+_GRID_KW  = dict(color="#cccccc", lw=0.7, alpha=0.8)
+_TRUE_KW  = dict(color="#555555", lw=2.0, ls="--", zorder=2, label="True front")
+_REF_HV   = (-100, 0)   # hypervolume reference point (maximisation space)
+
+_ALGO_STYLE = {
+    "mo":   dict(color="#1f77b4", marker="o", label="MO Q-Learning"),
+    "owa":  dict(color="#2ca02c", marker="s", label="OWA Q-Learning"),
+    "cheb": dict(color="#9467bd", marker="^", label="Chebyshev Q-Learning"),
+    "pql":  dict(color="#d62728", marker="D", label="Pareto Q-Learning"),
+}
 
 
-def _points_from_dict_points(points_dict):
-    """
-    Accepts dict values in either of these forms:
-        weights -> (time_cost, treasure)
-    or
-        weights -> [(time_cost, treasure)]
-    or
-        weights -> [(time_cost, treasure), ...]
-    Converts them to maximization form: (-time_cost, treasure)
-    """
-    points = []
+# =============================================================================
+# Low-level helpers
+# =============================================================================
 
-    for value in points_dict.values():
-        if value is None:
+def _xy(pts):
+    return [p[0] for p in pts], [p[1] for p in pts]
+
+
+def _to_max(time_cost, treasure):
+    return (-time_cost, treasure)
+
+
+def _dict_to_max(d):
+    """Dict {weights: (tc, tr) or [(tc,tr),...]}  →  [(-tc, tr), ...]"""
+    pts = []
+    for v in d.values():
+        if v is None:
             continue
-
-        # Case 1: single point tuple like (time_cost, treasure)
-        if (
-            isinstance(value, tuple)
-            and len(value) == 2
-            and isinstance(value[0], (int, float, np.integer, np.floating))
-            and isinstance(value[1], (int, float, np.integer, np.floating))
-        ):
-            time_cost, treasure = value
-            points.append((-time_cost, treasure))
-
-        # Case 2: list/tuple of points like [(time_cost, treasure), ...]
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                if (
-                    isinstance(item, (list, tuple))
-                    and len(item) == 2
-                ):
-                    time_cost, treasure = item
-                    points.append((-time_cost, treasure))
-
-    return points
+        if (isinstance(v, tuple) and len(v) == 2
+                and isinstance(v[0], (int, float, np.integer, np.floating))):
+            pts.append(_to_max(*v))
+        elif isinstance(v, (list, tuple)):
+            for item in v:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    pts.append(_to_max(*item))
+    return pts
 
 
-def _points_from_list_points(points_list):
+def _list_to_max(lst):
+    return [_to_max(*p) for p in lst]
+
+
+def _avg(d, keys):
+    """Average metric curves across weight settings."""
+    return np.mean(np.array([d[k] for k in keys]), axis=0)
+
+
+def _save(fig, path):
+    plt.tight_layout()
+    fig.savefig(path, dpi=_DPI, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  → saved {path}")
+
+
+# =============================================================================
+# Smart text-box placement
+# Divides the axes into 4 quadrants, counts how many data points fall in each,
+# and places the box in the quadrant with the fewest points.
+# Works for HV, IGD and Epsilon right panels.
+# =============================================================================
+
+def _smart_text_box(ax, text, xs, ys, fontsize=11):
     """
-    Accepts:
-        [(time_cost, treasure), ...]
-    Converts to:
-        [(-time_cost, treasure), ...]
+    Place a labelled text box in the corner of `ax` that contains the fewest
+    data points.  xs, ys are the data coordinates already on the axes.
+
+    Quadrant map (axes-fraction space):
+        TL (0,0.5)-(0.5,1)   TR (0.5,0.5)-(1,1)
+        BL (0,0)  -(0.5,0.5) BR (0.5,0) -(1,0.5)
     """
-    points = []
-    for item in points_list:
-        if isinstance(item, (list, tuple)) and len(item) == 2:
-            time_cost, treasure = item
-            points.append((-time_cost, treasure))
-    return points
+    if len(xs) == 0:
+        # No data – default to bottom-right
+        _corner_text(ax, text, "BR", fontsize)
+        return
+
+    # Convert data coords to axes-fraction using current limits
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    xspan = xlim[1] - xlim[0] if xlim[1] != xlim[0] else 1.0
+    yspan = ylim[1] - ylim[0] if ylim[1] != ylim[0] else 1.0
+
+    fx = [(x - xlim[0]) / xspan for x in xs]
+    fy = [(y - ylim[0]) / yspan for y in ys]
+
+    counts = {"TL": 0, "TR": 0, "BL": 0, "BR": 0}
+    for x, y in zip(fx, fy):
+        if   x < 0.5 and y >= 0.5: counts["TL"] += 1
+        elif x >= 0.5 and y >= 0.5: counts["TR"] += 1
+        elif x < 0.5 and y < 0.5:  counts["BL"] += 1
+        else:                        counts["BR"] += 1
+
+    best = min(counts, key=counts.get)
+    _corner_text(ax, text, best, fontsize)
 
 
-def _unique_points(points):
-    return sorted(set(points), key=lambda p: (p[0], p[1]))
+def _corner_text(ax, text, corner, fontsize=11):
+    """Place text in the given corner ('TL','TR','BL','BR') of the axes."""
+    pad = 0.03
+    positions = {
+        "BR": (1 - pad, pad,       "right", "bottom"),
+        "BL": (pad,     pad,       "left",  "bottom"),
+        "TR": (1 - pad, 1 - pad,   "right", "top"),
+        "TL": (pad,     1 - pad,   "left",  "top"),
+    }
+    x, y, ha, va = positions[corner]
+    ax.text(x, y, text,
+            transform=ax.transAxes, ha=ha, va=va, fontsize=fontsize,
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#aaaaaa",
+                      alpha=0.95),
+            zorder=20)
 
 
-def _pareto_unique(points):
-    return _unique_points(extract_pareto_front(points))
+# =============================================================================
+# HV staircase
+# =============================================================================
+
+def _hv_staircase(pts_max, ref_point=_REF_HV):
+    """
+    Return (xs, ys) of the closed staircase polygon for the dominated region.
+
+    pts_max   – list of (x, y) in maximisation form (x = −time_cost, y = treasure)
+    ref_point – (rx, ry): worst-case reference (rx is the leftmost boundary)
+
+    The polygon traces:
+        start at top-left of first point → step right & down across all points
+        → close along the bottom back to start.
+    """
+    if not pts_max:
+        return [], []
+
+    # Sort ascending by x (left to right); Pareto front has y descending
+    pts = sorted(pts_max, key=lambda p: p[0])
+    rx, ry = ref_point
+
+    xs, ys = [], []
+
+    # Start: from reference x up to first point's y
+    xs.append(rx);       ys.append(pts[0][1])   # top-left corner
+    xs.append(pts[0][0]); ys.append(pts[0][1])  # horizontal to first point
+
+    for i in range(len(pts)):
+        xi, yi = pts[i]
+        # Drop vertically to the next point's y (or ry for last point)
+        y_next = pts[i + 1][1] if i + 1 < len(pts) else ry
+        xs.append(xi); ys.append(y_next)
+
+        if i + 1 < len(pts):
+            # Move horizontally right to next point's x
+            xs.append(pts[i + 1][0]); ys.append(y_next)
+
+    # Close along the bottom back to the reference x
+    xs.append(rx); ys.append(ry)
+    xs.append(rx); ys.append(pts[0][1])  # close polygon back to start
+
+    return xs, ys
 
 
-def _split_xy(points):
-    x = [p[0] for p in points]
-    y = [p[1] for p in points]
-    return x, y
+# =============================================================================
+# 1.  PARETO FRONT 
+# =============================================================================
+
+def _plot_pareto_front(all_pts_max, algo_key, title_prefix, save_path):
+    style  = _ALGO_STYLE[algo_key]
+    colour = style["color"]
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+    ax.spines[["top", "right"]].set_visible(False)
+
+    tf = get_true_reference_pf()
+    if tf:
+        ax.plot(*_xy(tf), **_TRUE_KW)
+
+    if all_pts_max:
+        ax.scatter(*_xy(all_pts_max), s=50, alpha=0.35, color=colour,
+                   marker="o", label="All discovered points", zorder=3)
+
+    pf = extract_pareto_front(all_pts_max)
+    if pf:
+        ax.plot(*_xy(pf), color=colour, lw=2, alpha=0.9, zorder=4)
+        ax.scatter(*_xy(pf), s=110, marker="x", color=colour, lw=2.5,
+                   label="Learned front", zorder=5)
+
+    ax.set_xlabel("− Time Cost",    fontsize=12)
+    ax.set_ylabel("Treasure Value", fontsize=12)
+    ax.set_title(f"{title_prefix}: Pareto Front", fontsize=13, pad=10)
+    ax.legend(fontsize=10)
+    ax.grid(True, **_GRID_KW)
+    _save(fig, save_path)
 
 
-def _plot_points_and_front(ax, all_points, title, all_label="All final points", front_label="Pareto front"):
-    pareto_front = _pareto_unique(all_points)
+# =============================================================================
+# 2.  HYPERVOLUME
+# =============================================================================
 
-    if all_points:
-        x_all, y_all = _split_xy(all_points)
-        ax.scatter(x_all, y_all, s=80, alpha=0.6, label=all_label)
+def _plot_hv(all_pts_max, hv_ts_dict, hv_pts_dict, key_list,
+             algo_key, title_prefix, save_path):
+    """
+    Left  – HV over timesteps.
+    Right – Correct rectangular staircase (like Image 3), with smart-placed
+            HV value box that never overlaps data or legend.
+    """
+    style  = _ALGO_STYLE[algo_key]
+    colour = style["color"]
 
-    if pareto_front:
-        x_pf, y_pf = _split_xy(pareto_front)
-        ax.scatter(x_pf, y_pf, s=140, marker="x", linewidths=2.5, label=front_label, zorder=5)
-        if len(pareto_front) > 1:
-            ax.plot(x_pf, y_pf, linewidth=2, alpha=0.9)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig.patch.set_facecolor("white")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("white")
+        ax.spines[["top", "right"]].set_visible(False)
 
-    ax.set_xlabel("- Time Cost")
-    ax.set_ylabel("Treasure Value")
-    ax.set_title(title)
-    ax.grid(True)
-    ax.legend()
+    # Left: HV over time
+    for key in key_list:
+        if key in hv_ts_dict and key in hv_pts_dict:
+            ax1.plot(hv_ts_dict[key], hv_pts_dict[key],
+                     lw=1.4, alpha=0.75, label=str(key))
+    ax1.set_xlabel("Timestep",    fontsize=12)
+    ax1.set_ylabel("Hypervolume", fontsize=12)
+    ax1.set_title(f"{title_prefix}\nHV vs Timestep  (higher = better)",
+                  fontsize=12, pad=8)
+    ax1.legend(fontsize=7, title="Weights", ncol=2)
+    ax1.grid(True, **_GRID_KW)
+
+    # Right: staircase 
+    tf = get_true_reference_pf()
+    if tf:
+        ax2.plot(*_xy(tf), **_TRUE_KW)
+
+    pf = extract_pareto_front(all_pts_max) if all_pts_max else []
+
+    all_x, all_y = [], []
+    if pf:
+        xs, ys = _hv_staircase(pf, _REF_HV)
+        ax2.fill(xs, ys, color=colour, alpha=0.20,
+                 label="Dominated area (HV)", zorder=1)
+        ax2.plot(xs, ys, color=colour, lw=1.2, ls="--", zorder=2)
+        ax2.scatter(*_xy(pf), color=colour, s=70, zorder=5,
+                    label="Learned front")
+        all_x, all_y = _xy(pf)
+
+    ax2.scatter(*_REF_HV, color="red", marker="x", s=100, lw=2.5,
+                label=f"HV ref point {_REF_HV}", zorder=6)
+    all_x = list(all_x) + [_REF_HV[0]]
+    all_y = list(all_y) + [_REF_HV[1]]
+
+    hv_final = compute_hypervolume_2d(pf, _REF_HV) if pf else 0.0
+
+    ax2.set_xlabel("− Time Cost",    fontsize=12)
+    ax2.set_ylabel("Treasure Value", fontsize=12)
+    ax2.set_title(f"{title_prefix}\nHV — Dominated Area in Objective Space",
+                  fontsize=12, pad=8)
+    # Legend fixed to upper-right so text box can avoid it
+    ax2.legend(fontsize=9, loc="upper right")
+    ax2.grid(True, **_GRID_KW)
+
+    # Draw first so limits are set, then place smart text box
+    plt.tight_layout()
+    _smart_text_box(ax2, f"HV = {hv_final:.4f}", all_x, all_y)
+
+    _save(fig, save_path)
 
 
-def plot_mo_q_results(all_episode_points, all_hv_timesteps, all_hv_points, weights_list):
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+# =============================================================================
+# 3.  IGD
+# =============================================================================
 
-    all_points = _points_from_dict_points(all_episode_points)
-    _plot_points_and_front(
-        axes[0],
-        all_points,
-        "MO Q-Learning: Final Frozen Policy Returns"
-    )
+def _plot_igd(all_pts_max, igd_ts_dict, igd_pts_dict, key_list,
+              algo_key, title_prefix, save_path):
+    """
+    Left  – IGD over timesteps.
+    Right – Arrows from every true-front point to nearest learned point,
+            plus smart-placed IGD value box (like Image 2).
+    """
+    style  = _ALGO_STYLE[algo_key]
+    colour = style["color"]
 
-    for weights in weights_list:
-        if weights in all_hv_timesteps and weights in all_hv_points:
-            axes[1].plot(
-                all_hv_timesteps[weights],
-                all_hv_points[weights],
-                marker="o",
-                label=str(weights)
-            )
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig.patch.set_facecolor("white")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("white")
+        ax.spines[["top", "right"]].set_visible(False)
 
-    axes[1].set_xlabel("Timestep")
-    axes[1].set_ylabel("Hypervolume")
-    axes[1].set_title("Hypervolume vs Timestep for MO Q-Learning")
-    axes[1].grid(True)
-    axes[1].legend(title="Weights")
+    #Left: IGD over time
+    for key in key_list:
+        if key in igd_ts_dict and key in igd_pts_dict:
+            ax1.plot(igd_ts_dict[key], igd_pts_dict[key],
+                     lw=1.4, alpha=0.75, label=str(key))
+    ax1.set_xlabel("Timestep", fontsize=12)
+    ax1.set_ylabel("IGD",      fontsize=12)
+    ax1.set_title(f"{title_prefix}\nIGD vs Timestep  (lower = better)",
+                  fontsize=12, pad=8)
+    ax1.legend(fontsize=7, title="Weights", ncol=2)
+    ax1.grid(True, **_GRID_KW)
+
+    # ── Right: arrow visualisation ────────────────────────────────────────────
+    tf     = get_true_reference_pf()
+    pf     = extract_pareto_front(all_pts_max) if all_pts_max else []
+    pf_arr = np.array(pf) if pf else None
+
+    if tf:
+        ax2.plot(*_xy(tf), color="#555555", lw=2.0, ls="--",
+                 zorder=2, label="True front")
+
+    all_x, all_y = [], []
+    if pf_arr is not None and len(pf_arr) > 0:
+        tf_arr = np.array(tf)
+        for r in tf_arr:
+            dists  = np.linalg.norm(pf_arr - r, axis=1)
+            a_near = pf_arr[dists.argmin()]
+            if np.linalg.norm(a_near - r) > 1e-6:
+                ax2.annotate(
+                    "", xy=a_near, xytext=r,
+                    arrowprops=dict(arrowstyle="-|>", color="#888888",
+                                    lw=0.9, mutation_scale=7,
+                                    shrinkA=3, shrinkB=3),
+                    zorder=3,
+                )
+        ax2.scatter(*_xy(pf), color=colour, s=70, zorder=5,
+                    label="Learned front")
+        all_x, all_y = _xy(pf)
+
+    # IGD value
+    from utils import compute_igd
+    igd_val = compute_igd(tf, pf) if (tf and pf) else 0.0
+
+    ax2.set_xlabel("− Time Cost",    fontsize=12)
+    ax2.set_ylabel("Treasure Value", fontsize=12)
+    ax2.set_title(f"{title_prefix}\nIGD — True front → Nearest Learned Point",
+                  fontsize=12, pad=8)
+    ax2.legend(fontsize=9, loc="upper right")
+    ax2.grid(True, **_GRID_KW)
 
     plt.tight_layout()
-    plt.savefig("results/mo_q_learning.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    _smart_text_box(ax2, f"IGD = {igd_val:.4f}", list(all_x), list(all_y))
+
+    _save(fig, save_path)
 
 
-def plot_owa_q_results(all_episode_points_owa, all_hv_timesteps_owa, all_hv_points_owa, owa_settings):
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+# =============================================================================
+# 4.  EPSILON INDICATOR
+# =============================================================================
 
-    all_points = _points_from_dict_points(all_episode_points_owa)
-    _plot_points_and_front(
-        axes[0],
-        all_points,
-        "OWA Q-Learning: Final Frozen Policy Returns"
-    )
+def _plot_epsilon(all_pts_max, eps_ts_dict, eps_pts_dict, key_list,
+                  algo_key, title_prefix, save_path):
+    """
+    Left  – Epsilon over timesteps.
+    Right – Learned front (solid) + epsilon-shifted version (faded markers)
+            connected by thin lines (like Image 6), with smart-placed ε box.
+    """
+    style  = _ALGO_STYLE[algo_key]
+    colour = style["color"]
 
-    for owa_w in owa_settings:
-        if owa_w in all_hv_timesteps_owa and owa_w in all_hv_points_owa:
-            axes[1].plot(
-                all_hv_timesteps_owa[owa_w],
-                all_hv_points_owa[owa_w],
-                marker="o",
-                label=str(owa_w)
-            )
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig.patch.set_facecolor("white")
+    for ax in (ax1, ax2):
+        ax.set_facecolor("white")
+        ax.spines[["top", "right"]].set_visible(False)
 
-    axes[1].set_xlabel("Timestep")
-    axes[1].set_ylabel("Hypervolume")
-    axes[1].set_title("Hypervolume vs Timestep for OWA Q-Learning")
-    axes[1].grid(True)
-    axes[1].legend(title="OWA weights")
+    # ── Left: epsilon over time ───────────────────────────────────────────────
+    for key in key_list:
+        if key in eps_ts_dict and key in eps_pts_dict:
+            ax1.plot(eps_ts_dict[key], eps_pts_dict[key],
+                     lw=1.4, alpha=0.75, label=str(key))
+    ax1.set_xlabel("Timestep",           fontsize=12)
+    ax1.set_ylabel("Epsilon indicator",  fontsize=12)
+    ax1.set_title(f"{title_prefix}\nEpsilon vs Timestep  (lower = better)",
+                  fontsize=12, pad=8)
+    ax1.legend(fontsize=7, title="Weights", ncol=2)
+    ax1.grid(True, **_GRID_KW)
+
+    # ── Right: shift visualisation ────────────────────────────────────────────
+    tf     = get_true_reference_pf()
+    pf     = extract_pareto_front(all_pts_max) if all_pts_max else []
+    pf_arr = np.array(pf) if pf else None
+
+    if tf:
+        ax2.plot(*_xy(tf), color="#555555", lw=2.0, ls="--",
+                 zorder=2, label="True front")
+
+    eps_val = 0.0
+    all_x, all_y = [], []
+
+    if pf_arr is not None and len(pf_arr) > 0:
+        from utils import compute_epsilon_indicator
+        eps_val = compute_epsilon_indicator(tf, pf)
+
+        # Original learned front
+        ax2.scatter(*_xy(pf), color=colour, s=70, zorder=5,
+                    label="Learned front")
+
+        # Epsilon-shifted front (faded)
+        pf_shifted = [(x + eps_val, y + eps_val) for x, y in pf]
+        ax2.scatter(*_xy(pf_shifted), color=colour, s=40, alpha=0.4,
+                    marker="o", zorder=4,
+                    label=f"Front + ε ({eps_val:.3f})")
+
+        # Connect original → shifted with thin lines
+        for (x0, y0), (x1, y1) in zip(pf, pf_shifted):
+            ax2.plot([x0, x1], [y0, y1],
+                     color=colour, lw=0.8, alpha=0.5, zorder=3)
+
+        # Collect all plotted x/y for smart placement
+        sx, sy = _xy(pf_shifted)
+        all_x = list(_xy(pf)[0]) + list(sx)
+        all_y = list(_xy(pf)[1]) + list(sy)
+
+    ax2.set_xlabel("− Time Cost",    fontsize=12)
+    ax2.set_ylabel("Treasure Value", fontsize=12)
+    ax2.set_title(f"{title_prefix}\nEpsilon — Required Shift to Cover True Front",
+                  fontsize=12, pad=8)
+    ax2.legend(fontsize=9, loc="upper right")
+    ax2.grid(True, **_GRID_KW)
 
     plt.tight_layout()
-    plt.savefig("results/owa_q_learning.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    _smart_text_box(ax2, f"ε = {eps_val:.4f}", all_x, all_y)
+
+    _save(fig, save_path)
 
 
-def plot_chebyshev_q_results(all_episode_points_cheb, all_hv_timesteps_cheb, all_hv_points_cheb, cheb_settings):
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+# =============================================================================
+# Public per-algorithm entry points  (all 4 algorithms share _plot_all_for_algo)
+# =============================================================================
 
-    all_points = _points_from_dict_points(all_episode_points_cheb)
-    _plot_points_and_front(
-        axes[0],
-        all_points,
-        "Chebyshev Q-Learning: Final Frozen Policy Returns"
+def _plot_all_for_algo(algo_key, title_prefix, prefix,
+                       all_pts_max,
+                       hv_ts, hv_pts,
+                       igd_ts, igd_pts,
+                       eps_ts, eps_pts,
+                       key_list):
+    """Saves pareto_front, hv, igd, and epsilon plots for one algorithm."""
+    _plot_pareto_front(
+        all_pts_max, algo_key, title_prefix,
+        save_path=f"results/{prefix}_pareto_front.png",
+    )
+    _plot_hv(
+        all_pts_max, hv_ts, hv_pts, key_list,
+        algo_key, title_prefix,
+        save_path=f"results/{prefix}_hv.png",
+    )
+    _plot_igd(
+        all_pts_max, igd_ts, igd_pts, key_list,
+        algo_key, title_prefix,
+        save_path=f"results/{prefix}_igd.png",
+    )
+    _plot_epsilon(
+        all_pts_max, eps_ts, eps_pts, key_list,
+        algo_key, title_prefix,
+        save_path=f"results/{prefix}_epsilon.png",
     )
 
-    for cheb_w in cheb_settings:
-        if cheb_w in all_hv_timesteps_cheb and cheb_w in all_hv_points_cheb:
-            axes[1].plot(
-                all_hv_timesteps_cheb[cheb_w],
-                all_hv_points_cheb[cheb_w],
-                marker="o",
-                label=str(cheb_w)
-            )
 
-    axes[1].set_xlabel("Timestep")
-    axes[1].set_ylabel("Hypervolume")
-    axes[1].set_title("Hypervolume vs Timestep for Chebyshev Q-Learning")
-    axes[1].grid(True)
-    axes[1].legend(title="Chebyshev weights")
-
-    plt.tight_layout()
-    plt.savefig("results/chebyshev_q_learning.png", dpi=300, bbox_inches="tight")
-    plt.show()
-
-
-def plot_pql_results(episode_points_pql, hv_timesteps_pql, hv_points_pql):
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-    all_points = _points_from_list_points(episode_points_pql)
-    _plot_points_and_front(
-        axes[0],
-        all_points,
-        "Pareto Q-Learning: Final Policy Returns"
+def plot_mo_q_results(all_ep, hv_ts, hv_pts, igd_ts, igd_pts,
+                      eps_ts, eps_pts, weights_list):
+    _plot_all_for_algo(
+        "mo", "MO Q-Learning", "mo",
+        _dict_to_max(all_ep),
+        hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts,
+        weights_list,
     )
 
-    axes[1].plot(hv_timesteps_pql, hv_points_pql, marker="o", label="PQL")
-    axes[1].set_xlabel("Timestep")
-    axes[1].set_ylabel("Hypervolume")
-    axes[1].set_title("Hypervolume vs Timestep for Pareto Q-Learning")
-    axes[1].grid(True)
-    axes[1].legend()
 
-    plt.tight_layout()
-    plt.savefig("results/pql.png", dpi=300, bbox_inches="tight")
-    plt.show()
+def plot_owa_q_results(all_ep, hv_ts, hv_pts, igd_ts, igd_pts,
+                       eps_ts, eps_pts, owa_settings):
+    _plot_all_for_algo(
+        "owa", "OWA Q-Learning", "owa",
+        _dict_to_max(all_ep),
+        hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts,
+        owa_settings,
+    )
 
+
+def plot_chebyshev_q_results(all_ep, hv_ts, hv_pts, igd_ts, igd_pts,
+                              eps_ts, eps_pts, cheb_settings):
+    _plot_all_for_algo(
+        "cheb", "Chebyshev Q-Learning", "cheb",
+        _dict_to_max(all_ep),
+        hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts,
+        cheb_settings,
+    )
+
+
+def plot_pql_results(ep_points, hv_ts, hv_pts, igd_ts, igd_pts,
+                     eps_ts, eps_pts):
+    _plot_all_for_algo(
+        "pql", "Pareto Q-Learning", "pql",
+        _list_to_max(ep_points),
+        {"pql": hv_ts},  {"pql": hv_pts},
+        {"pql": igd_ts}, {"pql": igd_pts},
+        {"pql": eps_ts}, {"pql": eps_pts},
+        ["pql"],
+    )
+
+
+# =============================================================================
+# Comparison plots
+# =============================================================================
 
 def plot_all_comparisons(
-    all_episode_points,
-    all_episode_points_owa,
-    all_episode_points_cheb,
-    episode_points_pql,
-    all_hv_timesteps,
-    all_hv_points,
-    all_hv_timesteps_owa,
-    all_hv_points_owa,
-    all_hv_timesteps_cheb,
-    all_hv_points_cheb,
-    hv_timesteps_pql,
-    hv_points_pql,
-    weights_list,
-    owa_settings,
-    cheb_settings,
+    all_ep_mo,   all_ep_owa,   all_ep_cheb,   ep_pql,
+    hv_ts_mo,    hv_pts_mo,
+    hv_ts_owa,   hv_pts_owa,
+    hv_ts_cheb,  hv_pts_cheb,
+    hv_ts_pql,   hv_pts_pql,
+    igd_ts_mo,   igd_pts_mo,
+    igd_ts_owa,  igd_pts_owa,
+    igd_ts_cheb, igd_pts_cheb,
+    igd_ts_pql,  igd_pts_pql,
+    eps_ts_mo,   eps_pts_mo,
+    eps_ts_owa,  eps_pts_owa,
+    eps_ts_cheb, eps_pts_cheb,
+    eps_ts_pql,  eps_pts_pql,
+    weights_list, owa_settings, cheb_settings,
 ):
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    pts_mo   = _dict_to_max(all_ep_mo)
+    pts_owa  = _dict_to_max(all_ep_owa)
+    pts_cheb = _dict_to_max(all_ep_cheb)
+    pts_pql  = _list_to_max(ep_pql)
 
-    all_points_mo = _points_from_dict_points(all_episode_points)
-    all_points_owa = _points_from_dict_points(all_episode_points_owa)
-    all_points_cheb = _points_from_dict_points(all_episode_points_cheb)
-    all_points_pql = _points_from_list_points(episode_points_pql)
+    pf_mo   = extract_pareto_front(pts_mo)
+    pf_owa  = extract_pareto_front(pts_owa)
+    pf_cheb = extract_pareto_front(pts_cheb)
+    pf_pql  = extract_pareto_front(pts_pql)
 
-    pf_mo = _pareto_unique(all_points_mo)
-    pf_owa = _pareto_unique(all_points_owa)
-    pf_cheb = _pareto_unique(all_points_cheb)
-    pf_pql = _pareto_unique(all_points_pql)
+    def _lc(key): return _ALGO_STYLE[key]["color"]
+    def _lb(key): return _ALGO_STYLE[key]["label"]
 
-    if all_points_mo:
-        x_mo_all, y_mo_all = _split_xy(all_points_mo)
-        axes[0].scatter(x_mo_all, y_mo_all, s=55, alpha=0.35, marker="o")
+    # ── A. HV over time ───────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(9, 6))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.plot(hv_ts_mo[weights_list[0]],    _avg(hv_pts_mo,   weights_list),
+            lw=2, color=_lc("mo"),   label=_lb("mo"))
+    ax.plot(hv_ts_owa[owa_settings[0]],   _avg(hv_pts_owa,  owa_settings),
+            lw=2, color=_lc("owa"),  label=_lb("owa"))
+    ax.plot(hv_ts_cheb[cheb_settings[0]], _avg(hv_pts_cheb, cheb_settings),
+            lw=2, color=_lc("cheb"), label=_lb("cheb"))
+    ax.plot(hv_ts_pql, hv_pts_pql,
+            lw=2, color=_lc("pql"),  label=_lb("pql"))
+    ax.set_xlabel("Timestep",    fontsize=12)
+    ax.set_ylabel("Hypervolume", fontsize=12)
+    ax.set_title("HV Comparison — All Algorithms\n"
+                 "(averaged over weight settings; higher = better)", fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, **_GRID_KW)
+    _save(fig, "results/comparison_hv.png")
 
-    if all_points_owa:
-        x_owa_all, y_owa_all = _split_xy(all_points_owa)
-        axes[0].scatter(x_owa_all, y_owa_all, s=55, alpha=0.35, marker="s")
+    # ── B. HV objective-space (staircases) ────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(9, 7))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+    ax.spines[["top", "right"]].set_visible(False)
+    tf = get_true_reference_pf()
+    if tf:
+        ax.plot(*_xy(tf), **_TRUE_KW)
+    for key, pf in [("mo", pf_mo), ("owa", pf_owa),
+                    ("cheb", pf_cheb), ("pql", pf_pql)]:
+        c = _lc(key)
+        if pf:
+            xs, ys = _hv_staircase(pf, _REF_HV)
+            ax.fill(xs, ys, color=c, alpha=0.15, zorder=1)
+            ax.plot(xs, ys, color=c, lw=1.0, ls="--", zorder=2)
+            ax.scatter(*_xy(pf), color=c, s=60, zorder=5,
+                       label=f"{_lb(key)}  HV={compute_hypervolume_2d(pf, _REF_HV):.1f}")
+    ax.scatter(*_REF_HV, color="red", marker="x", s=100, lw=2.5,
+               label=f"HV ref point {_REF_HV}", zorder=6)
+    ax.set_xlabel("− Time Cost",    fontsize=12)
+    ax.set_ylabel("Treasure Value", fontsize=12)
+    ax.set_title("HV Objective-Space View — Final Fronts\n"
+                 "(shaded = dominated area per algorithm)", fontsize=12)
+    ax.legend(fontsize=9)
+    ax.grid(True, **_GRID_KW)
+    _save(fig, "results/comparison_hv_obj.png")
 
-    if all_points_cheb:
-        x_cheb_all, y_cheb_all = _split_xy(all_points_cheb)
-        axes[0].scatter(x_cheb_all, y_cheb_all, s=55, alpha=0.35, marker="x")
+    # ── C. IGD over time ──────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(9, 6))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.plot(igd_ts_mo[weights_list[0]],    _avg(igd_pts_mo,   weights_list),
+            lw=2, color=_lc("mo"),   label=_lb("mo"))
+    ax.plot(igd_ts_owa[owa_settings[0]],   _avg(igd_pts_owa,  owa_settings),
+            lw=2, color=_lc("owa"),  label=_lb("owa"))
+    ax.plot(igd_ts_cheb[cheb_settings[0]], _avg(igd_pts_cheb, cheb_settings),
+            lw=2, color=_lc("cheb"), label=_lb("cheb"))
+    ax.plot(igd_ts_pql, igd_pts_pql,
+            lw=2, color=_lc("pql"),  label=_lb("pql"))
+    ax.set_xlabel("Timestep", fontsize=12)
+    ax.set_ylabel("IGD",      fontsize=12)
+    ax.set_title("IGD Comparison — All Algorithms\n"
+                 "(averaged over weight settings; lower = better)", fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, **_GRID_KW)
+    _save(fig, "results/comparison_igd.png")
 
-    if all_points_pql:
-        x_pql_all, y_pql_all = _split_xy(all_points_pql)
-        axes[0].scatter(x_pql_all, y_pql_all, s=55, alpha=0.35, marker="D")
-
-    if pf_mo:
-        x_mo, y_mo = _split_xy(pf_mo)
-        axes[0].scatter(x_mo, y_mo, s=90, marker="o", label="MO Q-learning", zorder=5)
-        if len(pf_mo) > 1:
-            axes[0].plot(x_mo, y_mo, linewidth=2, alpha=0.9)
-
-    if pf_owa:
-        x_owa, y_owa = _split_xy(pf_owa)
-        axes[0].scatter(x_owa, y_owa, s=100, marker="s", label="OWA Q-learning", zorder=6)
-        if len(pf_owa) > 1:
-            axes[0].plot(x_owa, y_owa, linewidth=2, alpha=0.9)
-
-    if pf_pql:
-        x_pql, y_pql = _split_xy(pf_pql)
-        axes[0].scatter(x_pql, y_pql, s=100, marker="D", label="Pareto Q-learning", zorder=7)
-        if len(pf_pql) > 1:
-            axes[0].plot(x_pql, y_pql, linewidth=2, alpha=0.9)
-
-    if pf_cheb:
-        x_cheb, y_cheb = _split_xy(pf_cheb)
-        axes[0].scatter(
-            x_cheb,
-            y_cheb,
-            s=140,
-            marker="x",
-            linewidths=2.5,
-            label="Chebyshev Q-learning",
-            zorder=20
-        )
-        if len(pf_cheb) > 1:
-            axes[0].plot(x_cheb, y_cheb, linewidth=2, alpha=0.9)
-
-    axes[0].set_xlabel("- Time Cost")
-    axes[0].set_ylabel("Treasure Value")
-    axes[0].set_title("Pareto Front of Final Learned Policies")
-    axes[0].grid(True)
-    axes[0].legend()
-
-    mo_hv_avg = np.mean(np.array([all_hv_points[w] for w in weights_list]), axis=0)
-    mo_t = all_hv_timesteps[weights_list[0]]
-
-    owa_hv_avg = np.mean(np.array([all_hv_points_owa[w] for w in owa_settings]), axis=0)
-    owa_t = all_hv_timesteps_owa[owa_settings[0]]
-
-    cheb_hv_avg = np.mean(np.array([all_hv_points_cheb[w] for w in cheb_settings]), axis=0)
-    cheb_t = all_hv_timesteps_cheb[cheb_settings[0]]
-
-    axes[1].plot(mo_t, mo_hv_avg, marker="o", label="MO Q-learning")
-    axes[1].plot(owa_t, owa_hv_avg, marker="o", label="OWA Q-learning")
-    axes[1].plot(cheb_t, cheb_hv_avg, marker="o", label="Chebyshev Q-learning")
-    axes[1].plot(hv_timesteps_pql, hv_points_pql, marker="o", label="Pareto Q-learning")
-
-    axes[1].set_xlabel("Timestep")
-    axes[1].set_ylabel("Hypervolume")
-    axes[1].set_title("Hypervolume Comparison")
-    axes[1].grid(True)
-    axes[1].legend()
-
-    plt.tight_layout()
-    plt.savefig("results/hypervolume_comparison.png", dpi=300, bbox_inches="tight")
-    plt.show()
+    # ── D. Epsilon over time ──────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(9, 6))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.plot(eps_ts_mo[weights_list[0]],    _avg(eps_pts_mo,   weights_list),
+            lw=2, color=_lc("mo"),   label=_lb("mo"))
+    ax.plot(eps_ts_owa[owa_settings[0]],   _avg(eps_pts_owa,  owa_settings),
+            lw=2, color=_lc("owa"),  label=_lb("owa"))
+    ax.plot(eps_ts_cheb[cheb_settings[0]], _avg(eps_pts_cheb, cheb_settings),
+            lw=2, color=_lc("cheb"), label=_lb("cheb"))
+    ax.plot(eps_ts_pql, eps_pts_pql,
+            lw=2, color=_lc("pql"),  label=_lb("pql"))
+    ax.set_xlabel("Timestep",          fontsize=12)
+    ax.set_ylabel("Epsilon indicator", fontsize=12)
+    ax.set_title("Epsilon Comparison — All Algorithms\n"
+                 "(averaged over weight settings; lower = better)", fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, **_GRID_KW)
+    _save(fig, "results/comparison_epsilon.png")
