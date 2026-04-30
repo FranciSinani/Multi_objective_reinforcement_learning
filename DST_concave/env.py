@@ -9,7 +9,7 @@ def get_true_reference_pf():
     sorted by first objective ascending.
     """
     env = mo_gymnasium.make("deep-sea-treasure-concave-v0")
-    pf  = np.array(env.unwrapped.pareto_front(gamma=0.99))
+    pf  = np.array(env.unwrapped.pareto_front(gamma=1.0))
     env.close()
     # env gives (treasure, time_return); time_return is already negative
     pf_max = [(float(pt[1]), float(pt[0])) for pt in pf]

@@ -1,6 +1,4 @@
 """
-owa_q_learning.py
-=================
 OWA Q-Learning: Ordered Weighted Averaging scalarisation.
 
 OWA sorts objective values before applying weights,
@@ -10,10 +8,8 @@ This produces more balanced solutions and can reach some concave front regions.
 OWA([v1, v2], [w1, w2]) = w1 * max(v1, v2) + w2 * min(v1, v2)
 
 Coordinate convention
----------------------
     rew[0] = treasure  (positive, maximise)
     rew[1] = time_ret  (negative = -steps, maximise)
-    Evaluation returns (time_cost=steps, treasure).
     Metrics logged in maximisation form: (-steps, treasure).
 """
 
@@ -24,9 +20,8 @@ from utils import compute_hypervolume_2d, compute_igd, compute_epsilon_indicator
 from env import get_true_reference_pf
 
 
-# =============================================================================
+
 # OWA scalarisation
-# =============================================================================
 
 def _owa(values, weights):
     """
@@ -44,9 +39,7 @@ def _best_action(Q1, Q2, state, weights):
     ]))
 
 
-# =============================================================================
 # Policy evaluation
-# =============================================================================
 
 def _evaluate(env, Q1, Q2, weights, n_eval=10):
     """
@@ -70,9 +63,8 @@ def _evaluate(env, Q1, Q2, weights, n_eval=10):
     return float(np.mean(times)), float(np.mean(treasures))
 
 
-# =============================================================================
+
 # Training
-# =============================================================================
 
 def train_owa_q(
     owa_weights,

@@ -1,10 +1,7 @@
 """
-main.py
-=======
 Entry point for all MORL experiments on Deep Sea Treasure (concave).
 
-Usage
------
+Usage:
     python main.py mo        # MO Q-Learning only
     python main.py owa       # OWA Q-Learning only
     python main.py cheb      # Chebyshev Q-Learning only
@@ -43,7 +40,7 @@ from plots import (
 
 os.makedirs("results", exist_ok=True)
 
-# shared weight settings (used by all scalarisation methods) 
+#weight settings (used by all scalarisation methods) 
 WEIGHTS = [
     (0.9, 0.1), (0.8, 0.2), (0.7, 0.3),
     (0.6, 0.4), (0.5, 0.5), (0.4, 0.6),
@@ -59,15 +56,14 @@ LOG_INTERVAL = 1_000
 
 MODE = sys.argv[1].lower() if len(sys.argv) > 1 else "pql"
 
-# =============================================================================
 # MO Q-Learning
-# =============================================================================
+
 if MODE in ("mo", "all", "compare"):
     print("\n[MO Q-Learning]")
-    mo_ep                                    = {}
-    mo_hv_ts,  mo_hv_pts                    = {}, {}
-    mo_igd_ts, mo_igd_pts                   = {}, {}
-    mo_eps_ts, mo_eps_pts                   = {}, {}
+    mo_ep = {}
+    mo_hv_ts,  mo_hv_pts = {}, {}
+    mo_igd_ts, mo_igd_pts = {}, {}
+    mo_eps_ts, mo_eps_pts = {}, {}
 
     for w in WEIGHTS:
         print(f"  weights={w}")
@@ -91,15 +87,15 @@ if MODE in ("mo", "all", "compare"):
             WEIGHTS,
         )
 
-# =============================================================================
+
 # OWA Q-Learning
-# =============================================================================
+
 if MODE in ("owa", "all", "compare"):
     print("\n[OWA Q-Learning]")
-    owa_ep                                    = {}
-    owa_hv_ts,  owa_hv_pts                   = {}, {}
-    owa_igd_ts, owa_igd_pts                  = {}, {}
-    owa_eps_ts, owa_eps_pts                  = {}, {}
+    owa_ep = {}
+    owa_hv_ts,  owa_hv_pts = {}, {}
+    owa_igd_ts, owa_igd_pts = {}, {}
+    owa_eps_ts, owa_eps_pts = {}, {}
 
     for w in WEIGHTS:
         print(f"  weights={w}")
@@ -123,15 +119,15 @@ if MODE in ("owa", "all", "compare"):
             WEIGHTS,
         )
 
-# =============================================================================
+
 # Chebyshev Q-Learning
-# =============================================================================
+
 if MODE in ("cheb", "all", "compare"):
     print("\n[Chebyshev Q-Learning]")
-    cheb_ep                                    = {}
-    cheb_hv_ts,  cheb_hv_pts                  = {}, {}
-    cheb_igd_ts, cheb_igd_pts                 = {}, {}
-    cheb_eps_ts, cheb_eps_pts                 = {}, {}
+    cheb_ep = {}
+    cheb_hv_ts,  cheb_hv_pts = {}, {}
+    cheb_igd_ts, cheb_igd_pts = {}, {}
+    cheb_eps_ts, cheb_eps_pts = {}, {}
 
     for w in WEIGHTS:
         print(f"  weights={w}")
@@ -155,9 +151,9 @@ if MODE in ("cheb", "all", "compare"):
             WEIGHTS,
         )
 
-# =============================================================================
+
 # Pareto Q-Learning
-# =============================================================================
+
 if MODE in ("pql", "all", "compare"):
     print("\n[Pareto Q-Learning]")
     pql_ep, pql_hv_ts, pql_hv_pts, pql_igd_ts, pql_igd_pts, \
@@ -177,9 +173,8 @@ if MODE in ("pql", "all", "compare"):
             pql_eps_ts, pql_eps_pts,
         )
 
-# =============================================================================
 # All individual plots
-# =============================================================================
+
 if MODE == "all":
     plot_mo_q_results(
         mo_ep, mo_hv_ts, mo_hv_pts, mo_igd_ts, mo_igd_pts,
@@ -198,9 +193,8 @@ if MODE == "all":
         pql_eps_ts, pql_eps_pts,
     )
 
-# =============================================================================
 # Comparison plots + final metrics table
-# =============================================================================
+
 if MODE == "compare":
     plot_all_comparisons(
         mo_ep,   owa_ep,   cheb_ep,   pql_ep,

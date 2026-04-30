@@ -1,6 +1,4 @@
 """
-chebyshev_q_learning.py
-=======================
 Chebyshev Q-Learning: scalarisation via weighted Chebyshev distance from ideal.
 
 Uses the L-infinity (Chebyshev) scalarisation:
@@ -11,11 +9,8 @@ The L-shaped contours of this function can reach ANY point on the Pareto front,
 including concave regions that weighted-sum misses.
 
 Coordinate convention
----------------------
     rew[0] = treasure  (positive, maximise)
     rew[1] = time_ret  (negative = -steps, maximise)
-    Q1 learns time_ret values, Q2 learns treasure values.
-    Evaluation returns (time_cost=steps, treasure).
     Metrics logged in maximisation form: (-steps, treasure).
 """
 
@@ -26,9 +21,7 @@ from utils import compute_hypervolume_2d, compute_igd, compute_epsilon_indicator
 from env import get_true_reference_pf
 
 
-# =============================================================================
 # Chebyshev scalarisation
-# =============================================================================
 
 def _cheb(values, weights, ideal):
     """
@@ -47,9 +40,7 @@ def _best_action(Q1, Q2, state, weights, ideal):
     ]))
 
 
-# =============================================================================
 # Policy evaluation
-# =============================================================================
 
 def _evaluate(env, Q1, Q2, weights, ideal, n_eval=10):
     """
@@ -73,9 +64,7 @@ def _evaluate(env, Q1, Q2, weights, ideal, n_eval=10):
     return float(np.mean(times)), float(np.mean(treasures))
 
 
-# =============================================================================
 # Training
-# =============================================================================
 
 def train_chebyshev_q(
     cheb_weights,

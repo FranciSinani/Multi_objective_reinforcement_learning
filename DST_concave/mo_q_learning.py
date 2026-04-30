@@ -1,6 +1,4 @@
 """
-mo_q_learning.py
-================
 MO Q-Learning: weighted-sum scalarisation of two separate Q-tables.
 
 Learns Q1 (time objective) and Q2 (treasure objective) independently,
@@ -9,12 +7,10 @@ for action selection. Each weight setting targets one point on the front.
 
 
 Coordinate convention
----------------------
+
     rew[0] = treasure  (positive float, maximise)
     rew[1] = time_ret  (negative float = -steps, maximise)
-    Evaluation returns (time_cost=steps, treasure) — positive step count.
     Metric logging converts to maximisation form: pt_max = (-steps, treasure).
-    All metric functions (HV, IGD, EPS) receive maximisation-form inputs.
 """
 
 import mo_gymnasium as mo_gym
@@ -24,15 +20,13 @@ from utils import compute_hypervolume_2d, compute_igd, compute_epsilon_indicator
 from env import get_true_reference_pf
 
 
-# =============================================================================
 # Policy evaluation
-# =============================================================================
 
 def _evaluate(env, Q, n_eval=10):
     """
     Run the greedy policy (argmax Q[s]) for n_eval episodes.
     Returns (mean_time_cost, mean_treasure).
-        time_cost = number of steps taken (positive integer)
+        time_cost = number of steps taken (positive int)
         treasure  = final treasure collected (positive float)
     """
     times, treasures = [], []
@@ -52,9 +46,7 @@ def _evaluate(env, Q, n_eval=10):
     return float(np.mean(times)), float(np.mean(treasures))
 
 
-# =============================================================================
 # Training
-# =============================================================================
 
 def train_mo_q(
     timeW,
@@ -112,7 +104,7 @@ def train_mo_q(
             treasure = float(rew[0])   # positive
             time_r   = float(rew[1])   # negative (= -1 per step)
 
-            # Independent Q-updates per objective (standard Q-learning)
+            # Independent Q-updates per objective
             Q1[state][action] += lr * (time_r   + gamma * np.max(Q1[next_state]) - Q1[state][action])
             Q2[state][action] += lr * (treasure + gamma * np.max(Q2[next_state]) - Q2[state][action])
 

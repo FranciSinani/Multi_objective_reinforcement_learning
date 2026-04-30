@@ -1,6 +1,4 @@
 """
-pareto_q_learning.py
-====================
 Pareto Q-Learning (PQL) for multi-objective RL.
 
 Maintains a set of non-dominated value vectors per (state, action) pair.
@@ -11,7 +9,6 @@ Internal coordinate form: (treasure, time_ret)
     time_ret  = rew[1]  negative float = -time_cost
 
 All metrics computed in maximisation form (-time_cost, treasure)
-via _front_to_max(), consistent with all other algorithms and utils.py.
 """
 
 import mo_gymnasium as mo_gym
@@ -28,9 +25,7 @@ from env import get_true_reference_pf
 MAX_POINTS = 50
 
 
-# =============================================================================
 # Vector-set helpers
-# =============================================================================
 
 def _prune(nd):
     """Limit Pareto set to MAX_POINTS while preserving spread."""
@@ -66,9 +61,7 @@ def _front_to_max(vectors):
     return [(float(t), float(tr)) for tr, t in vectors]
 
 
-# =============================================================================
 # Action selection
-# =============================================================================
 
 def _best_action(Q_sets, state, n_actions):
     """
@@ -87,9 +80,7 @@ def _best_action(Q_sets, state, n_actions):
     return best_a
 
 
-# =============================================================================
 # Training
-# =============================================================================
 
 def train_pql(
     total_timesteps = 400_000,
@@ -123,7 +114,6 @@ def train_pql(
                           epsilon_start - (epsilon_start - epsilon_end)
                           * global_step / total_timesteps)
 
-            # Epsilon-greedy: random vs set-theoretic ND-contribution rule
             if np.random.rand() < epsilon:
                 action = env.action_space.sample()
             else:
