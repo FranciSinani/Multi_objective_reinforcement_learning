@@ -174,5 +174,3 @@ Internal training form:  (time_cost, treasure)
 Maximisation form:       (-time_cost, treasure)   [both axes: larger = better]
 Plot axes:               x = -Time Cost,  y = Treasure Value
 ```
-
-The HV reference point is `(-100, 0)` in maximisation form.
