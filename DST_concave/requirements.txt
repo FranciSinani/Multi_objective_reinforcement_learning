@@ -2,4 +2,4 @@ mo-gymnasium[deep-sea-treasure]
 gymnasium
 numpy
 matplotlib
-pymoo
+torch

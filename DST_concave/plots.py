@@ -37,6 +37,7 @@ _ALGO_STYLE = {
     "mo":   dict(color="#1f77b4", marker="o", label="MO Q-Learning"),
     "owa":  dict(color="#2ca02c", marker="s", label="OWA Q-Learning"),
     "cheb": dict(color="#9467bd", marker="^", label="Chebyshev Q-Learning"),
+    "choquet": dict(color="#ff7f0e", marker="P", label="Choquet Integral Q-Learning"),
     "pql":  dict(color="#d62728", marker="D", label="Pareto Q-Learning"),
 }
 
@@ -415,6 +416,16 @@ def plot_chebyshev_q_results(all_ep, hv_ts, hv_pts, igd_ts, igd_pts,
     )
 
 
+def plot_choquet_q_results(all_ep, hv_ts, hv_pts, igd_ts, igd_pts,
+                           eps_ts, eps_pts, choquet_settings):
+    _plot_all_for_algo(
+        "choquet", "Choquet Integral Q-Learning", "choquet",
+        _dict_to_max(all_ep),
+        hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts,
+        choquet_settings,
+    )
+
+
 def plot_pql_results(ep_points, hv_ts, hv_pts, igd_ts, igd_pts,
                      eps_ts, eps_pts):
     _plot_all_for_algo(
@@ -429,29 +440,34 @@ def plot_pql_results(ep_points, hv_ts, hv_pts, igd_ts, igd_pts,
 # Comparison plots
 
 def plot_all_comparisons(
-    all_ep_mo,   all_ep_owa,   all_ep_cheb,   ep_pql,
+    all_ep_mo,   all_ep_owa,   all_ep_cheb,   all_ep_choquet,   ep_pql,
     hv_ts_mo,    hv_pts_mo,
     hv_ts_owa,   hv_pts_owa,
     hv_ts_cheb,  hv_pts_cheb,
+    hv_ts_choquet, hv_pts_choquet,
     hv_ts_pql,   hv_pts_pql,
     igd_ts_mo,   igd_pts_mo,
     igd_ts_owa,  igd_pts_owa,
     igd_ts_cheb, igd_pts_cheb,
+    igd_ts_choquet, igd_pts_choquet,
     igd_ts_pql,  igd_pts_pql,
     eps_ts_mo,   eps_pts_mo,
     eps_ts_owa,  eps_pts_owa,
     eps_ts_cheb, eps_pts_cheb,
+    eps_ts_choquet, eps_pts_choquet,
     eps_ts_pql,  eps_pts_pql,
-    weights_list, owa_settings, cheb_settings,
+    weights_list, owa_settings, cheb_settings, choquet_settings,
 ):
     pts_mo   = _dict_to_max(all_ep_mo)
     pts_owa  = _dict_to_max(all_ep_owa)
     pts_cheb = _dict_to_max(all_ep_cheb)
+    pts_choquet = _dict_to_max(all_ep_choquet)
     pts_pql  = _list_to_max(ep_pql)
 
     pf_mo   = extract_pareto_front(pts_mo)
     pf_owa  = extract_pareto_front(pts_owa)
     pf_cheb = extract_pareto_front(pts_cheb)
+    pf_choquet = extract_pareto_front(pts_choquet)
     pf_pql  = extract_pareto_front(pts_pql)
 
     def _lc(key): return _ALGO_STYLE[key]["color"]
@@ -471,6 +487,9 @@ def plot_all_comparisons(
     ax.plot(hv_ts_cheb[cheb_settings[0]],
             _smooth(_avg(hv_pts_cheb, cheb_settings)),
             lw=2, color=_lc("cheb"), label=_lb("cheb"))
+    ax.plot(hv_ts_choquet[choquet_settings[0]],
+            _smooth(_avg(hv_pts_choquet, choquet_settings)),
+            lw=2, color=_lc("choquet"), label=_lb("choquet"))
     ax.plot(hv_ts_pql, _smooth(hv_pts_pql),
             lw=2, color=_lc("pql"),  label=_lb("pql"))
     ax.set_xlabel("Timestep",    fontsize=12)
@@ -490,7 +509,8 @@ def plot_all_comparisons(
     if tf:
         ax.plot(*_xy(tf), **_TRUE_KW)
     for key, pf in [("mo", pf_mo), ("owa", pf_owa),
-                    ("cheb", pf_cheb), ("pql", pf_pql)]:
+                    ("cheb", pf_cheb), ("choquet", pf_choquet),
+                    ("pql", pf_pql)]:
         c = _lc(key)
         if pf:
             xs, ys = _hv_staircase(pf, _REF_HV)
@@ -522,6 +542,9 @@ def plot_all_comparisons(
     ax.plot(igd_ts_cheb[cheb_settings[0]],
             _smooth(_avg(igd_pts_cheb, cheb_settings)),
             lw=2, color=_lc("cheb"), label=_lb("cheb"))
+    ax.plot(igd_ts_choquet[choquet_settings[0]],
+            _smooth(_avg(igd_pts_choquet, choquet_settings)),
+            lw=2, color=_lc("choquet"), label=_lb("choquet"))
     ax.plot(igd_ts_pql, _smooth(igd_pts_pql),
             lw=2, color=_lc("pql"),  label=_lb("pql"))
     ax.set_xlabel("Timestep", fontsize=12)
@@ -546,6 +569,9 @@ def plot_all_comparisons(
     ax.plot(eps_ts_cheb[cheb_settings[0]],
             _smooth(_avg(eps_pts_cheb, cheb_settings)),
             lw=2, color=_lc("cheb"), label=_lb("cheb"))
+    ax.plot(eps_ts_choquet[choquet_settings[0]],
+            _smooth(_avg(eps_pts_choquet, choquet_settings)),
+            lw=2, color=_lc("choquet"), label=_lb("choquet"))
     ax.plot(eps_ts_pql, _smooth(eps_pts_pql),
             lw=2, color=_lc("pql"),  label=_lb("pql"))
     ax.set_xlabel("Timestep",          fontsize=12)

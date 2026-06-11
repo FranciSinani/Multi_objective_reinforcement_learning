@@ -100,15 +100,17 @@ def compute_igd(true_front_max, approx_front_max):
     For each point in the TRUE front, finds the nearest point in the
     approximate front and averages those Euclidean distances.
     """
-    from pymoo.indicators.igd import IGD as _IGD
-
     if not true_front_max or not approx_front_max:
         return float("inf")
 
-    # pymoo uses minimisation convention: negate to convert from maximisation
-    pf = -np.array(true_front_max, dtype=float)
-    A  = -np.array(approx_front_max, dtype=float)
-    return float(_IGD(pf)(A))
+    tf = np.array(true_front_max, dtype=float)
+    ap = np.array(approx_front_max, dtype=float)
+
+    distances = []
+    for ref in tf:
+        nearest = np.linalg.norm(ap - ref, axis=1).min()
+        distances.append(nearest)
+    return float(np.mean(distances))
 
 # Epsilon additive quality indicator
 
