@@ -13,6 +13,9 @@ Metrics
     EUM - Expected Utility Metric (higher = better)
 """
 
+import json
+import os
+
 import numpy as np
 
 # Dominance & Pareto helpers
@@ -201,3 +204,36 @@ def list_points_to_maximize(points_list):
     Used for PQL which returns a list rather than a dict.
     """
     return [to_max_form(*p) for p in points_list]
+
+
+def save_final_solutions(
+    output_dir,
+    method,
+    final_solutions,
+    preference_solutions=None,
+    preference_label="weights",
+):
+    """Save the final front and optional preference-to-policy mapping."""
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, "final_solutions.json")
+    payload = {
+        "method": method,
+        "final_solutions": [
+            [float(point[0]), float(point[1])]
+            for point in final_solutions
+        ],
+    }
+    if preference_solutions is not None:
+        payload["preference_solutions"] = [
+            {
+                preference_label: [float(value) for value in preference],
+                "final_point": {
+                    "time_cost": float(point[0]),
+                    "treasure": float(point[1]),
+                },
+            }
+            for preference, point in preference_solutions.items()
+        ]
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
+    return path

@@ -1,145 +1,295 @@
 """
-Chebyshev Q-Learning: scalarisation via weighted Chebyshev distance from ideal.
+Tabular Chebyshev Q-Learning for Deep Sea Treasure Concave.
 
-Uses the L-infinity (Chebyshev) scalarisation:
-    Cheb([v1,v2], w, z) = max_i( w_i * |v_i - z_i| )
+Two objective Q-tables are learned. A normalized weighted Chebyshev
+scalarization selects one common action for both Bellman targets:
 
-The ideal point z is updated online from observed rewards.
-The L-shaped contours of this function can reach ANY point on the Pareto front,
-including concave regions that weighted-sum misses.
+    distance(v, w) = max_i w_i * (1 - normalized(v_i))
 
-Coordinate convention
-    rew[0] = treasure  (positive, maximise)
-    rew[1] = time_ret  (negative = -steps, maximise)
-    Metrics logged in maximisation form: (-steps, treasure).
+The action with the smallest distance to the normalized ideal point (1, 1)
+is selected. Raw objective returns are retained for learning and reporting.
 """
+
+from collections import defaultdict
 
 import mo_gymnasium as mo_gym
 import numpy as np
-from collections import defaultdict
-from utils import compute_hypervolume_2d, compute_igd, compute_epsilon_indicator
+
 from env import get_true_reference_pf
+from utils import (
+    compute_epsilon_indicator,
+    compute_hypervolume_2d,
+    compute_igd,
+    extract_pareto_front,
+)
 
 
-# Chebyshev scalarisation
-
-def _cheb(values, weights, ideal):
-    """
-    Weighted Chebyshev distance from ideal point (minimise).
-    values – [Q1_val, Q2_val] for a given action
-    ideal  – [best_time_ret_seen, best_treasure_seen]
-    """
-    return max(w * abs(v - z) for v, w, z in zip(values, weights, ideal))
+def _archive_to_max(archive):
+    return [
+        (-float(time_cost), float(treasure))
+        for time_cost, treasure in archive
+    ]
 
 
-def _best_action(Q1, Q2, state, weights, ideal):
-    """Greedy action: argmin Cheb([Q1[s,a], Q2[s,a]], weights, ideal)."""
-    return int(np.argmin([
-        _cheb([Q1[state][a], Q2[state][a]], weights, ideal)
-        for a in range(4)
-    ]))
+def _archive_front(archive):
+    front_max = extract_pareto_front(_archive_to_max(archive))
+    return sorted(
+        [(-time_return, treasure) for time_return, treasure in front_max],
+        key=lambda point: point[0],
+    )
 
 
-# Policy evaluation
+def _objective_ranges(true_front):
+    return {
+        "time": (min(point[0] for point in true_front), 0.0),
+        "treasure": (0.0, max(point[1] for point in true_front)),
+    }
 
-def _evaluate(env, Q1, Q2, weights, ideal, n_eval=10):
-    """
-    Run the greedy Chebyshev policy for n_eval episodes.
-    Returns (mean_time_cost, mean_treasure).
-    """
+
+def _normalize(values, lower, upper):
+    if np.isclose(lower, upper):
+        return np.full_like(values, 0.5, dtype=float)
+    return np.clip(
+        (np.asarray(values, dtype=float) - lower) / (upper - lower),
+        0.0,
+        1.0,
+    )
+
+
+def _cheb(normalized_values, weights):
+    """Return weighted distance from the normalized ideal point (1, 1)."""
+    return max(
+        weight * (1.0 - value)
+        for value, weight in zip(normalized_values, weights)
+    )
+
+
+def _action_distances(q_time, q_treasure, state, weights, ranges):
+    time_values = _normalize(q_time[state], *ranges["time"])
+    treasure_values = _normalize(q_treasure[state], *ranges["treasure"])
+    return np.asarray([
+        _cheb([time_values[action], treasure_values[action]], weights)
+        for action in range(len(time_values))
+    ])
+
+
+def _best_action(
+    q_time,
+    q_treasure,
+    state,
+    weights,
+    ranges,
+    rng=None,
+):
+    distances = _action_distances(
+        q_time, q_treasure, state, weights, ranges
+    )
+    best_actions = np.flatnonzero(np.isclose(distances, distances.min()))
+    if rng is None:
+        return int(best_actions[0])
+    return int(rng.choice(best_actions))
+
+
+def _evaluate(
+    env,
+    q_time,
+    q_treasure,
+    weights,
+    ranges,
+    n_eval=1,
+):
     times, treasures = [], []
     for _ in range(n_eval):
-        obs, _ = env.reset()
+        observation, _ = env.reset()
         done = False
         steps, treasure = 0, 0.0
         while not done:
-            state  = (int(obs[0]), int(obs[1]))
-            action = _best_action(Q1, Q2, state, weights, ideal)
-            obs, rew, terminated, truncated, _ = env.step(action)
-            treasure = float(rew[0])
-            steps   += 1
-            done     = terminated or truncated
+            state = (int(observation[0]), int(observation[1]))
+            action = _best_action(
+                q_time,
+                q_treasure,
+                state,
+                weights,
+                ranges,
+            )
+            observation, reward, terminated, truncated, _ = env.step(action)
+            treasure = float(reward[0])
+            steps += 1
+            done = terminated or truncated
         times.append(steps)
         treasures.append(treasure)
     return float(np.mean(times)), float(np.mean(treasures))
 
 
-# Training
-
 def train_chebyshev_q(
     cheb_weights,
-    total_timesteps = 400_000,
-    lr              = 0.1,
-    gamma           = 0.99,
-    epsilon_start   = 1.0,
-    epsilon_end     = 0.05,
-    log_interval    = 1_000,
-    n_eval          = 10,
+    total_timesteps=200_000,
+    lr=0.1,
+    gamma=0.99,
+    epsilon_start=1.0,
+    epsilon_end=0.05,
+    epsilon_decay_timesteps=None,
+    log_interval=1_000,
+    n_eval=1,
+    seed=None,
 ):
     """
-    Train Chebyshev Q-Learning with a fixed weight vector.
+    Train one tabular Chebyshev policy.
 
-    Returns: (final_point, hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts)
-        final_point - (time_cost, treasure) in training form
+    Returns:
+        final_point, archive_front,
+        hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts
     """
-    env     = mo_gym.make("deep-sea-treasure-concave-v0")
-    true_pf = get_true_reference_pf()   # maximisation form
+    if (
+        len(cheb_weights) != 2
+        or any(weight <= 0 for weight in cheb_weights)
+        or not np.isclose(sum(cheb_weights), 1.0)
+    ):
+        raise ValueError("Chebyshev weights must be positive and add to 1.")
+    if epsilon_decay_timesteps is None:
+        epsilon_decay_timesteps = total_timesteps
+    if epsilon_decay_timesteps <= 0:
+        raise ValueError("epsilon_decay_timesteps must be positive.")
 
-    Q1    = defaultdict(lambda: np.zeros(4))   # time_ret objective
-    Q2    = defaultdict(lambda: np.zeros(4))   # treasure objective
-    ideal = [-np.inf, -np.inf]                 # [best_time_ret, best_treasure]
+    rng = np.random.default_rng(seed)
+    env = mo_gym.make("deep-sea-treasure-concave-v0")
+    eval_env = mo_gym.make("deep-sea-treasure-concave-v0")
+    if seed is not None:
+        env.action_space.seed(seed)
+        eval_env.action_space.seed(seed)
 
-    hv_timesteps,  hv_points  = [], []
+    true_front = get_true_reference_pf()
+    ranges = _objective_ranges(true_front)
+    n_actions = env.action_space.n
+    q_time = defaultdict(lambda: np.zeros(n_actions))
+    q_treasure = defaultdict(lambda: np.zeros(n_actions))
+    archive = []
+
+    hv_timesteps, hv_points = [], []
     igd_timesteps, igd_points = [], []
     eps_timesteps, eps_points = [], []
-
     global_step, next_log = 0, log_interval
 
     while global_step < total_timesteps:
-        obs, _ = env.reset()
-        done   = False
+        observation, _ = env.reset(
+            seed=seed if global_step == 0 else None
+        )
+        done = False
+        episode_steps = 0
+        episode_treasure = 0.0
 
         while not done and global_step < total_timesteps:
-            state   = (int(obs[0]), int(obs[1]))
-            epsilon = max(epsilon_end,
-                          epsilon_start - (epsilon_start - epsilon_end)
-                          * global_step / total_timesteps)
+            state = (int(observation[0]), int(observation[1]))
+            epsilon = max(
+                epsilon_end,
+                epsilon_start
+                - (epsilon_start - epsilon_end)
+                * global_step / epsilon_decay_timesteps,
+            )
+            if rng.random() < epsilon:
+                action = int(env.action_space.sample())
+            else:
+                action = _best_action(
+                    q_time,
+                    q_treasure,
+                    state,
+                    cheb_weights,
+                    ranges,
+                    rng,
+                )
 
-            action = (env.action_space.sample() if np.random.rand() < epsilon
-                      else _best_action(Q1, Q2, state, cheb_weights, ideal))
+            next_observation, reward, terminated, truncated, _ = env.step(
+                action
+            )
+            done = terminated or truncated
+            next_state = (
+                int(next_observation[0]),
+                int(next_observation[1]),
+            )
+            treasure = float(reward[0])
+            time_reward = float(reward[1])
+            episode_steps += 1
+            episode_treasure = treasure
 
-            next_obs, rew, terminated, truncated, _ = env.step(action)
+            if done:
+                next_time = 0.0
+                next_treasure = 0.0
+            else:
+                best_next = _best_action(
+                    q_time,
+                    q_treasure,
+                    next_state,
+                    cheb_weights,
+                    ranges,
+                    rng,
+                )
+                next_time = q_time[next_state][best_next]
+                next_treasure = q_treasure[next_state][best_next]
+
+            q_time[state][action] += lr * (
+                time_reward + gamma * next_time - q_time[state][action]
+            )
+            q_treasure[state][action] += lr * (
+                treasure
+                + gamma * next_treasure
+                - q_treasure[state][action]
+            )
+
+            observation = next_observation
             global_step += 1
-            done        = terminated or truncated
-            next_state  = (int(next_obs[0]), int(next_obs[1]))
 
-            treasure = float(rew[0])
-            time_r   = float(rew[1])
-
-            # Update ideal point with observed rewards (maximisation)
-            ideal[0] = max(ideal[0], time_r)
-            ideal[1] = max(ideal[1], treasure)
-
-            best_next = _best_action(Q1, Q2, next_state, cheb_weights, ideal)
-
-            Q1[state][action] += lr * (time_r   + gamma * Q1[next_state][best_next] - Q1[state][action])
-            Q2[state][action] += lr * (treasure + gamma * Q2[next_state][best_next] - Q2[state][action])
-
-            obs = next_obs
+            if done:
+                archive.append((
+                    float(episode_steps),
+                    float(episode_treasure),
+                ))
 
             while global_step >= next_log:
-                tc, tr   = _evaluate(env, Q1, Q2, cheb_weights, ideal, n_eval)
-                pt_max   = (-tc, tr)   # maximisation form
+                time_cost, eval_treasure = _evaluate(
+                    eval_env,
+                    q_time,
+                    q_treasure,
+                    cheb_weights,
+                    ranges,
+                    n_eval,
+                )
+                archive.append((time_cost, eval_treasure))
+                archive_max = extract_pareto_front(
+                    _archive_to_max(archive)
+                )
 
                 hv_timesteps.append(next_log)
-                hv_points.append(compute_hypervolume_2d([pt_max], ref_point=(-100, 0)))
+                hv_points.append(compute_hypervolume_2d(
+                    archive_max, ref_point=(-100, 0)
+                ))
                 igd_timesteps.append(next_log)
-                igd_points.append(compute_igd(true_pf, [pt_max]))
+                igd_points.append(compute_igd(true_front, archive_max))
                 eps_timesteps.append(next_log)
-                eps_points.append(compute_epsilon_indicator(true_pf, [pt_max]))
-
+                eps_points.append(compute_epsilon_indicator(
+                    true_front, archive_max
+                ))
                 next_log += log_interval
 
-    tc, tr = _evaluate(env, Q1, Q2, cheb_weights, ideal, n_eval)
+    final_point = _evaluate(
+        eval_env,
+        q_time,
+        q_treasure,
+        cheb_weights,
+        ranges,
+        n_eval,
+    )
+    archive.append(final_point)
+    archive_front = _archive_front(archive)
     env.close()
-    return (tc, tr), hv_timesteps, hv_points, igd_timesteps, igd_points, eps_timesteps, eps_points
+    eval_env.close()
+
+    return (
+        final_point,
+        archive_front,
+        hv_timesteps,
+        hv_points,
+        igd_timesteps,
+        igd_points,
+        eps_timesteps,
+        eps_points,
+    )

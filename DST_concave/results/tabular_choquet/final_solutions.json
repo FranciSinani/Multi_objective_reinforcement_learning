@@ -1,0 +1,298 @@
+{
+  "method": "Tabular Choquet Q-Learning",
+  "final_solutions": [
+    [
+      -19.0,
+      124.0
+    ],
+    [
+      -17.0,
+      74.0
+    ],
+    [
+      -14.0,
+      50.0
+    ],
+    [
+      -1.0,
+      1.0
+    ]
+  ],
+  "preference_solutions": [
+    {
+      "capacity": [
+        0.9,
+        0.1,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.8,
+        0.2,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.7,
+        0.3,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.6,
+        0.4,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.5,
+        0.5,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.4,
+        0.6,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.35,
+        0.65,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 14.0,
+        "treasure": 50.0
+      }
+    },
+    {
+      "capacity": [
+        0.3,
+        0.7,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 14.0,
+        "treasure": 50.0
+      }
+    },
+    {
+      "capacity": [
+        0.25,
+        0.75,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 19.0,
+        "treasure": 124.0
+      }
+    },
+    {
+      "capacity": [
+        0.2,
+        0.8,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 19.0,
+        "treasure": 124.0
+      }
+    },
+    {
+      "capacity": [
+        0.15,
+        0.85,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 14.0,
+        "treasure": 50.0
+      }
+    },
+    {
+      "capacity": [
+        0.1,
+        0.9,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 17.0,
+        "treasure": 74.0
+      }
+    },
+    {
+      "capacity": [
+        0.05,
+        0.95,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 19.0,
+        "treasure": 124.0
+      }
+    },
+    {
+      "capacity": [
+        0.1,
+        0.1,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 19.0,
+        "treasure": 124.0
+      }
+    },
+    {
+      "capacity": [
+        0.2,
+        0.2,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 19.0,
+        "treasure": 124.0
+      }
+    },
+    {
+      "capacity": [
+        0.3,
+        0.3,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 14.0,
+        "treasure": 50.0
+      }
+    },
+    {
+      "capacity": [
+        0.4,
+        0.4,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.1,
+        0.3,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 14.0,
+        "treasure": 50.0
+      }
+    },
+    {
+      "capacity": [
+        0.3,
+        0.1,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 14.0,
+        "treasure": 50.0
+      }
+    },
+    {
+      "capacity": [
+        0.1,
+        0.5,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 14.0,
+        "treasure": 50.0
+      }
+    },
+    {
+      "capacity": [
+        0.5,
+        0.1,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.2,
+        0.5,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 17.0,
+        "treasure": 74.0
+      }
+    },
+    {
+      "capacity": [
+        0.5,
+        0.2,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    },
+    {
+      "capacity": [
+        0.3,
+        0.5,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 19.0,
+        "treasure": 124.0
+      }
+    },
+    {
+      "capacity": [
+        0.5,
+        0.3,
+        1.0
+      ],
+      "final_point": {
+        "time_cost": 1.0,
+        "treasure": 1.0
+      }
+    }
+  ]
+}
