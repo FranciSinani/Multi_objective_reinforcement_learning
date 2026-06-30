@@ -15,7 +15,9 @@ import numpy as np
 import torch
 from torch import nn
 
+from config import DEEP_LR, EPSILON_END, EPSILON_START, GAMMA, LOG_INTERVAL, TIMESTEPS
 from env import get_true_reference_pf
+from scalarization import normalize_q_vectors, objective_ranges
 from utils import (
     compute_epsilon_indicator,
     compute_hypervolume_2d,
@@ -28,6 +30,7 @@ class VectorQNetwork(nn.Module):
     def __init__(self, state_dim, n_actions, hidden_dim=128):
         super().__init__()
         self.n_actions = n_actions
+        # The final layer predicts two objective values for every action.
         self.network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
@@ -38,11 +41,13 @@ class VectorQNetwork(nn.Module):
 
     def forward(self, states):
         values = self.network(states)
+        # Shape: (batch_size, n_actions, 2), where 2 = [time, treasure].
         return values.view(-1, self.n_actions, 2)
 
 
 class ReplayBuffer:
     def __init__(self, capacity, rng=None):
+        # Fixed-size memory; old transitions are discarded when full.
         self.data = deque(maxlen=capacity)
         self.rng = rng or random.Random()
 
@@ -50,6 +55,7 @@ class ReplayBuffer:
         self.data.append((state, action, reward, next_state, done))
 
     def sample(self, batch_size, device):
+        # Random minibatches reduce correlation between consecutive steps.
         batch = self.rng.sample(self.data, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
         return (
@@ -64,30 +70,8 @@ class ReplayBuffer:
         return len(self.data)
 
 
-def _objective_ranges(true_front):
-    return {
-        "time": (min(point[0] for point in true_front), 0.0),
-        "treasure": (0.0, max(point[1] for point in true_front)),
-    }
-
-
-def normalize_q_vectors(q_vectors, ranges):
-    q_vectors = np.asarray(q_vectors, dtype=float)
-    normalized = np.empty_like(q_vectors, dtype=float)
-    for objective, key in enumerate(("time", "treasure")):
-        lower, upper = ranges[key]
-        if np.isclose(lower, upper):
-            normalized[:, objective] = 0.5
-        else:
-            normalized[:, objective] = np.clip(
-                (q_vectors[:, objective] - lower) / (upper - lower),
-                0.0,
-                1.0,
-            )
-    return normalized
-
-
 def _grid_shape(observation_low, observation_high):
+    # Convert observation bounds into the number of grid cells per dimension.
     return (
         np.asarray(observation_high, dtype=int)
         - np.asarray(observation_low, dtype=int)
@@ -102,6 +86,7 @@ def _encode_state(observation, observation_low, observation_high):
         - np.asarray(observation_low, dtype=int)
     )
     index = np.ravel_multi_index(tuple(coordinates), tuple(shape))
+    # One-hot encoding: one active cell, all other grid cells are zero.
     encoded = np.zeros(int(np.prod(shape)), dtype=np.float32)
     encoded[index] = 1.0
     return encoded
@@ -113,11 +98,13 @@ def _best_action(network, state, score_function, ranges, device):
             state, dtype=torch.float32, device=device
         )
         q_vectors = network(state_tensor.unsqueeze(0))[0].cpu().numpy()
+    # Action choice uses normalized Q-vectors and the method's scalarization.
     normalized = normalize_q_vectors(q_vectors, ranges)
     return int(np.argmax(score_function(normalized)))
 
 
 def _best_actions_batch(network, states, score_function, ranges):
+    # Batch version used when constructing DQN targets for sampled transitions.
     with torch.no_grad():
         q_batch = network(states).cpu().numpy()
     actions = [
@@ -137,6 +124,7 @@ def _evaluate(
     device,
     n_eval,
 ):
+    # Greedy evaluation: no exploration, only scalarized action selection.
     times, treasures = [], []
     for _ in range(n_eval):
         observation, _ = environment.reset()
@@ -161,6 +149,7 @@ def _evaluate(
 
 
 def _archive_to_max(archive):
+    # Archive stores (time_cost, treasure); metrics use (-time_cost, treasure).
     return [
         (-float(time_cost), float(treasure))
         for time_cost, treasure in archive
@@ -168,6 +157,7 @@ def _archive_to_max(archive):
 
 
 def _archive_front(archive):
+    # Keep only nondominated discovered outcomes.
     front_max = extract_pareto_front(_archive_to_max(archive))
     return sorted(
         [(-time_return, treasure) for time_return, treasure in front_max],
@@ -176,6 +166,7 @@ def _archive_front(archive):
 
 
 def _soft_update(target, online, tau):
+    # Polyak update: slowly move the target network toward the online network.
     with torch.no_grad():
         for target_parameter, online_parameter in zip(
             target.parameters(), online.parameters()
@@ -185,12 +176,14 @@ def _soft_update(target, online, tau):
 
 
 def _checkpoint_score(time_cost, treasure, score_function, ranges):
+    # Select checkpoints using the method's own scalarized preference.
     outcome = np.array([[-float(time_cost), float(treasure)]])
     normalized = normalize_q_vectors(outcome, ranges)
     return float(score_function(normalized)[0])
 
 
 def _copy_state_dict_to_cpu(network):
+    # Store a checkpoint independently from GPU state and future updates.
     return {
         key: value.detach().cpu().clone()
         for key, value in network.state_dict().items()
@@ -199,13 +192,12 @@ def _copy_state_dict_to_cpu(network):
 
 def train_deep_scalarized_q(
     score_function,
-    total_timesteps=200_000,
-    lr=1e-3,
-    gamma=0.99,
-    epsilon_start=1.0,
-    epsilon_end=0.05,
-    epsilon_decay_timesteps=None,
-    log_interval=1_000,
+    total_timesteps=TIMESTEPS,
+    lr=DEEP_LR,
+    gamma=GAMMA,
+    epsilon_start=EPSILON_START,
+    epsilon_end=EPSILON_END,
+    log_interval=LOG_INTERVAL,
     n_eval=1,
     batch_size=64,
     replay_capacity=100_000,
@@ -228,10 +220,8 @@ def train_deep_scalarized_q(
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-    if epsilon_decay_timesteps is None:
-        epsilon_decay_timesteps = total_timesteps
-    if epsilon_decay_timesteps <= 0:
-        raise ValueError("epsilon_decay_timesteps must be positive.")
+    if total_timesteps <= 0:
+        raise ValueError("total_timesteps must be positive.")
     if not (0.0 < target_tau <= 1.0):
         raise ValueError("target_tau must be in (0, 1].")
 
@@ -244,7 +234,8 @@ def train_deep_scalarized_q(
         environment.action_space.seed(seed)
         evaluation_environment.action_space.seed(seed)
     true_front = get_true_reference_pf()
-    ranges = _objective_ranges(true_front)
+    ranges = objective_ranges(true_front)
+    # Scaling is used only in the loss so treasure errors do not dominate.
     objective_scales = torch.as_tensor(
         [
             ranges["time"][1] - ranges["time"][0],
@@ -265,6 +256,7 @@ def train_deep_scalarized_q(
     )))
     n_actions = environment.action_space.n
 
+    # Online network is trained; target network provides stable targets.
     online = VectorQNetwork(state_dim, n_actions, hidden_dim).to(device)
     target = VectorQNetwork(state_dim, n_actions, hidden_dim).to(device)
     target.load_state_dict(online.state_dict())
@@ -272,6 +264,7 @@ def train_deep_scalarized_q(
 
     optimizer = torch.optim.Adam(online.parameters(), lr=lr)
     replay = ReplayBuffer(replay_capacity, replay_rng)
+    # Archive stores discovered/evaluated raw outcomes: (time_cost, treasure).
     archive = []
 
     hv_timesteps, hv_points = [], []
@@ -294,15 +287,17 @@ def train_deep_scalarized_q(
         episode_treasure = 0.0
 
         while not done and global_step < total_timesteps:
+            # Exploration decreases linearly over the full training budget.
             epsilon = max(
                 epsilon_end,
                 epsilon_start
                 - (epsilon_start - epsilon_end)
-                * global_step / epsilon_decay_timesteps,
+                * global_step / total_timesteps,
             )
             if rng.random() < epsilon:
                 action = int(environment.action_space.sample())
             else:
+                # Exploitation uses the scalarization supplied by the method.
                 action = _best_action(
                     online, state, score_function, ranges, device
                 )
@@ -315,10 +310,13 @@ def train_deep_scalarized_q(
                 next_observation, observation_low, observation_high
             )
             reward_vector = np.array(
+                # Store reward as [time_return, treasure] to match Q output.
                 [float(reward[1]), float(reward[0])],
                 dtype=np.float32,
             )
 
+            # Every transition is stored, even though training occurs every
+            # train_frequency steps.
             replay.add(state, action, reward_vector, next_state, done)
             state = next_state
             global_step += 1
@@ -335,13 +333,17 @@ def train_deep_scalarized_q(
                 and global_step % train_frequency == 0
                 and len(replay) >= batch_size
             ):
+                # DQN update from a random replay minibatch.
                 states, actions, rewards, next_states, dones = replay.sample(
                     batch_size, device
                 )
                 batch_indices = torch.arange(batch_size, device=device)
+                # Predicted vector Q-values for the actions actually taken.
                 predicted = online(states)[batch_indices, actions]
 
                 with torch.no_grad():
+                    # Double-DQN style: online selects next action, target
+                    # network evaluates its vector value.
                     next_actions = _best_actions_batch(
                         online, next_states, score_function, ranges
                     )
@@ -362,11 +364,13 @@ def train_deep_scalarized_q(
                 )
                 optimizer.zero_grad()
                 loss.backward()
+                # Gradient clipping prevents unusually large updates.
                 nn.utils.clip_grad_norm_(online.parameters(), max_norm=10.0)
                 optimizer.step()
                 _soft_update(target, online, target_tau)
 
             while global_step >= next_log:
+                # Periodic evaluation provides metric curves and checkpoints.
                 time_cost, treasure = _evaluate(
                     evaluation_environment,
                     online,
@@ -384,6 +388,7 @@ def train_deep_scalarized_q(
                     ranges,
                 )
                 if evaluation_score > best_score:
+                    # Keep the best policy for this method's preference.
                     best_score = evaluation_score
                     best_state_dict = _copy_state_dict_to_cpu(online)
                     best_timestep = next_log
@@ -392,6 +397,8 @@ def train_deep_scalarized_q(
                     _archive_to_max(archive)
                 )
 
+                # Metrics are computed on the nondominated archive in
+                # maximization form.
                 hv_timesteps.append(next_log)
                 hv_points.append(compute_hypervolume_2d(
                     archive_max, ref_point=(-100, 0)
@@ -405,6 +412,8 @@ def train_deep_scalarized_q(
                 next_log += log_interval
 
     if best_state_dict is not None:
+        # Final policy is the best evaluated checkpoint, not necessarily the
+        # last network state.
         online.load_state_dict(best_state_dict)
 
     final_time, final_treasure = _evaluate(

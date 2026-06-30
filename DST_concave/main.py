@@ -7,6 +7,10 @@ Usage:
     python main.py cheb      # Chebyshev Q-Learning only
     python main.py choquet   # Choquet Integral Q-Learning only
     python main.py pql       # Pareto Q-Learning only
+    python main.py deep-ws   # Deep Weighted-Sum Q-Learning only
+    python main.py deep-owa  # Deep OWA Q-Learning only
+    python main.py deep-cheb # Deep Chebyshev Q-Learning only
+    python main.py deep-choquet # Deep Choquet Q-Learning only
     python main.py all       # all 5 algorithms + individual plots
     python main.py compare   # all 5 algorithms + comparison plots + metrics table
 
@@ -20,17 +24,35 @@ import numpy as np
 
 MODE = sys.argv[1].lower() if len(sys.argv) > 1 else "pql"
 
-if MODE in ("mo", "all", "compare"):
-    from mo_q_learning import train_mo_q
-if MODE in ("owa", "all", "compare"):
-    from owa_q_learning import train_owa_q
-if MODE in ("cheb", "all", "compare"):
-    from chebyshev_q_learning import train_chebyshev_q
-if MODE in ("choquet", "all", "compare"):
-    from choquet_tabular_q_learning import train_tabular_choquet_q
+if MODE in ("mo", "owa", "cheb", "choquet", "all", "compare"):
+    from tabular_scalarized_q_learning import (
+        train_chebyshev_q,
+        train_mo_q,
+        train_owa_q,
+        train_tabular_choquet_q,
+    )
+if MODE in ("deep-ws", "deep-owa", "deep-cheb", "deep-choquet"):
+    from deep_scalarized_q_learning import (
+        run_all_deep_chebyshev_weights,
+        run_all_deep_choquet_capacities,
+        run_all_deep_owa_weights,
+        run_all_deep_weighted_sum_weights,
+    )
 if MODE in ("pql", "all", "compare"):
     from pareto_q_learning import train_pql
 
+from config import (
+    CHOQUET_CAPACITIES,
+    EPSILON_END,
+    EPSILON_START,
+    GAMMA,
+    LOG_INTERVAL,
+    OWA_EXPERIMENT_SEED,
+    RESULT_DIRS,
+    TABULAR_LR,
+    TIMESTEPS,
+    WEIGHTS,
+)
 from env                  import get_true_reference_pf
 from utils import (
     compute_hypervolume_2d,
@@ -51,63 +73,12 @@ from plots import (
     plot_all_comparisons,
 )
 
-RESULT_DIRS = {
-    "mo": "results/tabular_weighted_sum",
-    "owa": "results/tabular_owa",
-    "cheb": "results/tabular_chebyshev",
-    "choquet": "results/tabular_choquet",
-    "pql": "results/pareto_q_learning",
-    "compare": "results/comparisons",
-}
 for result_dir in RESULT_DIRS.values():
     os.makedirs(result_dir, exist_ok=True)
 
-#weight settings (used by all scalarisation methods) 
-WEIGHTS = [
-    (0.90, 0.10), (0.80, 0.20), (0.70, 0.30),
-    (0.60, 0.40), (0.50, 0.50), (0.40, 0.60),
-    (0.35, 0.65), (0.30, 0.70), (0.25, 0.75),
-    (0.20, 0.80), (0.15, 0.85), (0.10, 0.90),
-    (0.05, 0.95),
-]
-CHOQUET_CAPACITIES = [
-    # Additive capacities: same preference grid as the weight-based methods.
-    (0.90, 0.10, 1.0),
-    (0.80, 0.20, 1.0),
-    (0.70, 0.30, 1.0),
-    (0.60, 0.40, 1.0),
-    (0.50, 0.50, 1.0),
-    (0.40, 0.60, 1.0),
-    (0.35, 0.65, 1.0),
-    (0.30, 0.70, 1.0),
-    (0.25, 0.75, 1.0),
-    (0.20, 0.80, 1.0),
-    (0.15, 0.85, 1.0),
-    (0.10, 0.90, 1.0),
-    (0.05, 0.95, 1.0),
-
-    # Synergy: mu1 + mu2 < mu12. Rewards solutions where both objectives are good.
-    (0.10, 0.10, 1.0),
-    (0.20, 0.20, 1.0),
-    (0.30, 0.30, 1.0),
-    (0.40, 0.40, 1.0),
-    (0.10, 0.30, 1.0),
-    (0.30, 0.10, 1.0),
-    (0.10, 0.50, 1.0),
-    (0.50, 0.10, 1.0),
-    (0.20, 0.50, 1.0),
-    (0.50, 0.20, 1.0),
-    (0.30, 0.50, 1.0),
-    (0.50, 0.30, 1.0),
-]
-TIMESTEPS    = 200_000
-WEIGHTED_SUM_TIMESTEPS = 200_000
-LR           = 0.1
-GAMMA        = 0.99
-EPS_START    = 1.0
-EPS_END      = 0.05
-LOG_INTERVAL = 1_000
-OWA_EXPERIMENT_SEED = 8
+LR = TABULAR_LR
+EPS_START = EPSILON_START
+EPS_END = EPSILON_END
 
 def count_true_front_coverage(true_front, learned_front, tol=0.5):
     """
@@ -124,6 +95,25 @@ def count_true_front_coverage(true_front, learned_front, tol=0.5):
             count += 1
     return count
 
+
+# Deep scalarized Q-Learning modes
+
+if MODE == "deep-ws":
+    print("\n[Deep Weighted-Sum Q-Learning]")
+    run_all_deep_weighted_sum_weights()
+
+if MODE == "deep-owa":
+    print("\n[Deep OWA Q-Learning]")
+    run_all_deep_owa_weights()
+
+if MODE == "deep-cheb":
+    print("\n[Deep Chebyshev Q-Learning]")
+    run_all_deep_chebyshev_weights()
+
+if MODE == "deep-choquet":
+    print("\n[Deep Choquet Q-Learning]")
+    run_all_deep_choquet_capacities()
+
 # MO Q-Learning
 
 if MODE in ("mo", "all", "compare"):
@@ -138,7 +128,7 @@ if MODE in ("mo", "all", "compare"):
         print(f"  weights={w}")
         pt, archive_front, hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts = train_mo_q(
             timeW=w[0], treasureW=w[1],
-            total_timesteps=WEIGHTED_SUM_TIMESTEPS, lr=LR, gamma=0.99,
+            total_timesteps=TIMESTEPS, lr=LR, gamma=0.99,
             epsilon_start=EPS_START, epsilon_end=EPS_END,
             log_interval=LOG_INTERVAL,
             seed=7 + WEIGHTS.index(w),
@@ -225,7 +215,7 @@ if MODE in ("cheb", "all", "compare"):
     for w in WEIGHTS:
         print(f"  weights={w}")
         pt, archive_front, hv_ts, hv_pts, igd_ts, igd_pts, eps_ts, eps_pts = train_chebyshev_q(
-            cheb_weights=w,
+            chebyshev_weights=w,
             total_timesteps=TIMESTEPS, lr=LR, gamma=GAMMA,
             epsilon_start=EPS_START, epsilon_end=EPS_END,
             log_interval=LOG_INTERVAL,

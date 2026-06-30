@@ -4,9 +4,10 @@ import numpy as np
  
 def get_true_reference_pf():
     """
-    Returns the true Pareto front in maximisation form:
-    list of (-time_cost, treasure) = (time_return, treasure),
-    sorted by first objective ascending.
+    Return the environment's known Pareto front as (time_return, treasure).
+
+    time_return is negative time cost, so both objectives are maximized:
+    higher time_return means lower time cost, and higher treasure is better.
     """
     env = mo_gymnasium.make("deep-sea-treasure-concave-v0")
     pf  = np.array(env.unwrapped.pareto_front(gamma=1.0))

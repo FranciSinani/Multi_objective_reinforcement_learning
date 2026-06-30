@@ -30,9 +30,11 @@ MAX_POINTS = 50
 
 def _prune(nd):
     """Limit Pareto set to MAX_POINTS while preserving spread."""
+    # Remove duplicates first; set-valued backups can recreate same vectors.
     nd = list(dict.fromkeys(map(tuple, nd)))
     if len(nd) <= MAX_POINTS:
         return nd
+    # If the set grows too large, keep evenly spread points by treasure order.
     nd_sorted = sorted(nd, key=lambda p: p[0])
     idx = np.linspace(0, len(nd_sorted) - 1, MAX_POINTS).astype(int)
     return [nd_sorted[i] for i in idx]
@@ -40,11 +42,13 @@ def _prune(nd):
 
 def _propagate(immediate, future_nd, gamma):
     """Bellman backup: immediate + gamma * each future vector."""
+    # PQL backs up a set of possible future vectors, not one scalar value.
     return [(immediate[0] + gamma * f[0],
              immediate[1] + gamma * f[1]) for f in future_nd]
 
 
 def _all_vectors(Q_sets, state, n_actions):
+    # Collect every vector stored under every action at one state.
     out = []
     for a in range(n_actions):
         out.extend(Q_sets[state][a])
@@ -52,6 +56,7 @@ def _all_vectors(Q_sets, state, n_actions):
 
 
 def _front_at_state(Q_sets, state, n_actions):
+    # The state value set is the nondominated union across all actions.
     return extract_pareto_front(
         _all_vectors(Q_sets, state, n_actions)
     )
@@ -74,12 +79,14 @@ def _best_action(Q_sets, state, n_actions, rng=None):
     """
     all_vecs = _all_vectors(Q_sets, state, n_actions)
     if not all_vecs:
+        # Early in training no action has values yet, so break ties randomly.
         candidates = np.arange(n_actions)
         return int(candidates[0] if rng is None else rng.choice(candidates))
     global_nd = set(map(tuple, get_non_dominated(all_vecs)))
 
     scores = []
     for a in range(n_actions):
+        # Prefer actions that contribute more vectors to the local Pareto set.
         count = sum(1 for v in Q_sets[state][a] if tuple(v) in global_nd)
         size = len(Q_sets[state][a])
         scores.append((count, size))
@@ -99,14 +106,11 @@ def train_pql(
     gamma           = 1.0,
     epsilon_start   = 1.0,
     epsilon_end     = 0.05,
-    epsilon_decay_timesteps = None,
     log_interval    = 1_000,
     seed            = None,
 ):
-    if epsilon_decay_timesteps is None:
-        epsilon_decay_timesteps = total_timesteps
-    if epsilon_decay_timesteps <= 0:
-        raise ValueError("epsilon_decay_timesteps must be positive.")
+    if total_timesteps <= 0:
+        raise ValueError("total_timesteps must be positive.")
 
     rng = np.random.default_rng(seed)
     env       = mo_gym.make("deep-sea-treasure-concave-v0")
@@ -118,6 +122,7 @@ def train_pql(
     start_obs, _ = env.reset(seed=seed)
     start_state  = (int(start_obs[0]), int(start_obs[1]))
 
+    # Q_sets[state][action] is a list of nondominated vectors, not one Q-value.
     Q_sets = defaultdict(lambda: [[] for _ in range(n_actions)])
 
     hv_timesteps,  hv_points  = [], []
@@ -132,13 +137,15 @@ def train_pql(
 
         while not done and global_step < total_timesteps:
             state   = (int(obs[0]), int(obs[1]))
+            # Same epsilon schedule as scalarized methods.
             epsilon = max(epsilon_end,
                           epsilon_start - (epsilon_start - epsilon_end)
-                          * global_step / epsilon_decay_timesteps)
+                          * global_step / total_timesteps)
 
             if rng.random() < epsilon:
                 action = int(env.action_space.sample())
             else:
+                # PQL has no weights; greediness is based on Pareto contribution.
                 action = _best_action(
                     Q_sets, state, n_actions, rng
                 )
@@ -148,20 +155,26 @@ def train_pql(
             next_state  = (int(next_obs[0]), int(next_obs[1]))
             global_step += 1
 
+            # Internal PQL vectors are stored as (treasure, time_return).
             immediate = (float(rew[0]), float(rew[1]))   # (treasure, time_ret)
 
             if done:
+                # Terminal state: future return is zero vector.
                 future_nd = [(0.0, 0.0)]
             else:
+                # Bootstrap from the nondominated value set at the next state.
                 future_nd = _front_at_state(
                     Q_sets, next_state, n_actions
                 )
                 if not future_nd:
+                    # If next state has not been learned yet, bootstrap from 0.
                     future_nd = [(0.0, 0.0)]
 
+            # Set-valued Bellman backup followed by nondominated filtering.
             new_set = extract_pareto_front(
                 _propagate(immediate, future_nd, gamma)
             )
+            # Store the pruned nondominated vector set for this state-action.
             Q_sets[state][action] = _prune(new_set)
 
             obs = next_obs
@@ -171,6 +184,7 @@ def train_pql(
 
             # Logging: all metrics via shared utils functions, maximisation form
             while global_step >= next_log:
+                # Metrics are measured from the start state's current front.
                 front     = _front_at_state(Q_sets, start_state, n_actions)
                 front_max = _front_to_max(front)
 
@@ -186,6 +200,7 @@ def train_pql(
     # Final front in (time_cost, treasure) form expected by plot_pql_results
     final_vectors = _all_vectors(Q_sets, start_state, n_actions)
     nd = extract_pareto_front(final_vectors)
+    # Convert internal (treasure, time_return) into (time_cost, treasure).
     final_points  = sorted(
         set((float(-t), float(tr)) for tr, t in nd),
         key=lambda p: p[0],

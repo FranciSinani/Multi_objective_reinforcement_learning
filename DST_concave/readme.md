@@ -1,176 +1,384 @@
-# Multi-Objective Reinforcement Learning — Deep Sea Treasure (Concave)
+# Multi-Objective Reinforcement Learning - Deep Sea Treasure Concave
 
 ## Overview
 
-This project implements and compares four multi-objective reinforcement learning (MORL) algorithms on the **Deep Sea Treasure Concave** environment from [MO-Gymnasium].
+This project implements and compares Multi-Objective Reinforcement Learning
+(MORL) methods on the `deep-sea-treasure-concave-v0` benchmark from
+MO-Gymnasium.
 
-The agent controls a submarine navigating a grid. At each cell the agent can collect a treasure. The two conflicting objectives are:
+The agent controls a submarine in a grid world. The objectives are conflicting:
 
-| Objective | Goal | Notes |
-|-----------|------|-------|
-| **Treasure value** | Maximise | Larger treasures are deeper in the grid |
-| **Time cost** | Minimise | Every step costs one time unit |
+| Objective | Goal | Meaning |
+| --- | --- | --- |
+| Time cost | Minimize | Reaching deeper treasures takes more steps |
+| Treasure value | Maximize | Deeper treasures usually have larger values |
 
-Because larger treasures require more steps to reach, there is no single "best" solution. Instead there is a **Pareto front** of trade-off solutions. The goal of each algorithm is to approximate this front as well as possible.
+The project uses maximization form for Pareto fronts and metrics:
 
----
-
-## Algorithms
-
-### 1. MO Q-Learning (`mo_q_learning.py`)
-Learns two separate Q-tables — one per objective — then combines them with a **weighted sum** during action selection:
-
-```
-Q[s,a] = w_time * Q1[s,a] + w_treasure * Q2[s,a]
+```text
+reported/plot form = (-time_cost, treasure)
 ```
 
-Run 9 times with different weight vectors. Each run finds one point on the front.  
-**Limitation:** weighted sum can only reach convex parts of the Pareto front.
+So higher values are better on both axes.
 
----
+## Implemented Methods
 
-### 2. OWA Q-Learning (`owa_q_learning.py`)
-Uses **Ordered Weighted Averaging** — sorts the objective Q-values before applying weights, so the weight attaches to the rank rather than to a fixed objective:
+### Tabular scalarized Q-learning
 
-```
-OWA([v1, v2], [w1, w2]) = w1 * max(v1,v2) + w2 * min(v1,v2)
-```
+The scalarized tabular methods share one implementation in
+`tabular_scalarized_q_learning.py`. They differ only by the scalarization
+function used to rank normalized objective Q-values.
 
-Run 9 times. Produces solutions that are more balanced than weighted sum.
+Implemented tabular methods:
 
----
+| Command | Method | Preference parameter |
+| --- | --- | --- |
+| `python .\main.py mo` | Weighted Sum Q-Learning | Weights |
+| `python .\main.py owa` | OWA Q-Learning | OWA weights |
+| `python .\main.py cheb` | Chebyshev Q-Learning | Chebyshev weights |
+| `python .\main.py choquet` | Choquet Q-Learning | Choquet capacities |
 
-### 3. Chebyshev Q-Learning (`chebyshev_q_learning.py`)
-Uses **Chebyshev scalarisation** — minimises the maximum weighted deviation from an ideal point:
+### Deep scalarized Q-learning
 
-```
-Cheb([v1,v2], w, z) = max_i( w_i * |v_i - z_i| )
-```
+The deep methods use a shared vector-valued DQN engine in
+`deep_morl_common.py`. Method wrappers and experiment runners are in
+`deep_scalarized_q_learning.py`.
 
-The ideal point `z` is updated online. The L-shaped contours of this function can theoretically reach **any** point on the Pareto front, including concave regions that weighted sum misses.  
-Run 9 times with different weight vectors.
+Implemented deep methods:
 
----
+| Command | Method | Preference parameter |
+| --- | --- | --- |
+| `py -3.13 .\main.py deep-ws` | Deep Weighted Sum Q-Learning | Weights |
+| `py -3.13 .\main.py deep-owa` | Deep OWA Q-Learning | OWA weights |
+| `py -3.13 .\main.py deep-cheb` | Deep Chebyshev Q-Learning | Chebyshev weights |
+| `py -3.13 .\main.py deep-choquet` | Deep Choquet Q-Learning | Choquet capacities |
 
-### 4. Pareto Q-Learning (`pareto_q_learning.py`)
-Keeps **sets of non-dominated value vectors** per state-action pair instead of scalar Q-values. No scalarisation is used during learning. A single run produces an approximation of the **full** Pareto front. Action selection uses hypervolume as the greedy criterion.
+### Pareto Q-Learning
 
----
+Pareto Q-Learning is implemented in `pareto_q_learning.py`.
 
-## Metrics
+Unlike scalarized methods, it does not train one policy per preference. It
+stores sets of non-dominated value vectors per state-action pair and attempts
+to approximate the full Pareto front in one run.
 
-Three metrics are tracked during training and reported at the end:
+Run it with:
 
-| Metric | Formula | Direction | What it measures |
-|--------|---------|-----------|-----------------|
-| **HV** — Hypervolume | Area dominated by solution set, bounded by a reference point | Higher = better | Convergence + spread + coverage in one number |
-| **IGD** — Inverted Generational Distance | Average distance from each true front point to its nearest learned point | Lower = better | How well the learned front covers the true front |
-| **ε** — Additive Epsilon Indicator | Minimum shift needed so learned front dominates true front | Lower = better | Worst-case gap between learned and true front |
-
-At the end of `compare` mode, **EUM** (Expected Utility Metric) is also reported:
-
-| Metric | What it measures |
-|--------|-----------------|
-| **EUM** — Expected Utility | Average best linear utility across all weight vectors; higher = better |
-
----
-
-## Output Files
-
-### Per-algorithm (4 images per algorithm)
-
-Running `python main.py mo` (or `owa`, `cheb`, `pql`) saves:
-
-```
-results/
-├── mo_pareto_front.png    ← Learned front vs true front
-├── mo_hv.png              ← HV over time  +  HV staircase in objective space
-├── mo_igd.png             ← IGD over time  +  distance arrows in objective space
-└── mo_epsilon.png         ← Epsilon over time  +  shift visualisation
+```powershell
+python .\main.py pql
 ```
 
-Same structure for `owa_`, `cheb_`, `pql_`.
+## Main Formulas
 
-### Comparison (4 images)
+### Objective normalization
 
-Running `python main.py compare` saves:
+Before scalarization, objective Q-values are normalized:
 
-```
-results/
-├── comparison_hv.png      ← HV over time, all 4 algorithms on one plot
-├── comparison_hv_obj.png  ← HV staircase view, all 4 final fronts together
-├── comparison_igd.png     ← IGD over time, all 4 algorithms on one plot
-└── comparison_epsilon.png ← Epsilon over time, all 4 algorithms on one plot
+```text
+Qbar_i = clip((Q_i - L_i) / (U_i - L_i), 0, 1)
 ```
 
-> **Note:** The Pareto-front panel is intentionally not included in the comparison output. Each algorithm's front is already available in its own dedicated `*_pareto_front.png` image.
+For this environment:
 
----
-
-## File Structure
-
-```
-.
-├── main.py                   Entry point — controls which algorithms run
-├── utils.py                  HV, IGD, Epsilon, EUM, dominance helpers
-├── env.py                    Loads the true Pareto front from MO-Gymnasium
-├── plots.py                  All plotting — separated images per metric
-├── mo_q_learning.py          MO Q-Learning training
-├── owa_q_learning.py         OWA Q-Learning training
-├── chebyshev_q_learning.py   Chebyshev Q-Learning training
-├── pareto_q_learning.py      Pareto Q-Learning training
-├── requirements.txt          Python dependencies
-└── results/                  All saved plots (created automatically)
+```text
+time range     = [-19, 0]
+treasure range = [0, 124]
 ```
 
----
+Normalization is used for scalarized action ranking. Final reported solutions
+remain raw environment outcomes.
+
+### Weighted Sum
+
+```text
+S(Qbar) = w_time * Qbar_time + w_treasure * Qbar_treasure
+```
+
+### OWA
+
+OWA sorts the normalized objective values first:
+
+```text
+S(Qbar) = w_1 * largest(Qbar) + w_2 * smallest(Qbar)
+```
+
+### Chebyshev
+
+The normalized ideal point is `(1, 1)`:
+
+```text
+S(Qbar) = - max_i w_i * abs(1 - Qbar_i)
+```
+
+The code maximizes the negative distance, which is equivalent to minimizing
+the weighted Chebyshev distance from the ideal point.
+
+### Choquet integral
+
+For two objectives and capacity `(mu_time, mu_treasure, mu_both)`:
+
+```text
+if Qbar_time <= Qbar_treasure:
+    C_mu = Qbar_time * mu_both
+           + (Qbar_treasure - Qbar_time) * mu_treasure
+else:
+    C_mu = Qbar_treasure * mu_both
+           + (Qbar_time - Qbar_treasure) * mu_time
+```
+
+In this project `mu_both = 1.0`.
+
+### Tabular Bellman update
+
+The next action is selected by scalarization:
+
+```text
+a_star = argmax_a S(Qbar(s_next, a))
+```
+
+Then both objective Q-values are updated using the same selected action:
+
+```text
+Q_i(s, a) <- Q_i(s, a)
+             + alpha * [r_i + gamma * Q_i(s_next, a_star) - Q_i(s, a)]
+```
+
+For terminal transitions:
+
+```text
+Q_i(s, a) <- Q_i(s, a) + alpha * [r_i - Q_i(s, a)]
+```
+
+### Deep DQN target
+
+The online network selects the next action:
+
+```text
+a_next = argmax_a S(Qbar_theta(s_next, a))
+```
+
+The target network computes the future value:
+
+```text
+y_i = r_i + gamma * (1 - done) * Q_target_i(s_next, a_next)
+```
+
+The network is trained using Huber loss with objective scaling:
+
+```text
+loss = Huber(Q_theta_i / scale_i, y_i / scale_i)
+```
+
+where:
+
+```text
+scale_time = 19
+scale_treasure = 124
+```
+
+The target network uses soft updates:
+
+```text
+theta_target <- tau * theta_online + (1 - tau) * theta_target
+```
+
+with `tau = 0.005`.
+
+## Code Structure
+
+```text
+config.py
+    Shared experiment settings: weights, capacities, timesteps, gamma,
+    learning rates, epsilon values, and result folders.
+
+env.py
+    Loads the Deep Sea Treasure environment and returns the true Pareto front
+    in maximization form: (-time_cost, treasure).
+
+scalarization.py
+    Normalization and scalarization formulas:
+    Weighted Sum, OWA, Chebyshev, and Choquet.
+
+tabular_scalarized_q_learning.py
+    Shared tabular vector Q-learning loop for Weighted Sum, OWA, Chebyshev,
+    and Choquet.
+
+deep_morl_common.py
+    Shared vector-valued DQN engine: neural network, replay buffer, target
+    network, Bellman targets, loss, evaluation, and archive.
+
+deep_scalarized_q_learning.py
+    Deep method wrappers and runners for all deep scalarized methods.
+
+pareto_q_learning.py
+    Pareto Q-Learning with set-valued Q-updates.
+
+utils.py
+    Pareto extraction, hypervolume, IGD, epsilon indicator, EUM, and JSON
+    result saving.
+
+plots.py
+    Pareto plots and metric plots.
+
+show_metrics.py
+    Prints metric summaries from saved result folders.
+
+main.py
+    Main command-line entry point.
+```
+
+## Pipeline
+
+```text
+config.py
+    -> main.py
+        -> tabular_scalarized_q_learning.py
+        -> deep_scalarized_q_learning.py
+        -> pareto_q_learning.py
+            -> env.py
+            -> scalarization.py
+            -> training and evaluation
+            -> utils.py
+            -> plots.py
+            -> results/
+```
+
+Scalarized method flow:
+
+```text
+state
+    -> Q-values for all actions
+    -> normalize Q-values
+    -> scalarization score
+    -> epsilon-greedy action selection
+    -> environment step
+    -> Bellman update
+    -> evaluation
+    -> final solution and plots
+```
+
+Deep method flow:
+
+```text
+state
+    -> one-hot encoding
+    -> neural network
+    -> vector Q-values for all actions
+    -> scalarized action selection
+    -> replay buffer
+    -> minibatch DQN update
+    -> target network update
+    -> checkpoint/evaluation
+```
+
+Pareto Q-Learning flow:
+
+```text
+state
+    -> set of Q-vectors per action
+    -> nondominated Bellman set backup
+    -> Pareto front approximation
+```
 
 ## How to Run
 
-**Install dependencies (once):**
-```bash
+Install dependencies:
+
+```powershell
 pip install -r requirements.txt
 ```
 
-**Run one algorithm:**
-```bash
-python main.py mo      # MO Q-Learning
-python main.py owa     # OWA Q-Learning
-python main.py cheb    # Chebyshev Q-Learning
-python main.py pql     # Pareto Q-Learning
+Run tabular methods:
+
+```powershell
+python .\main.py mo
+python .\main.py owa
+python .\main.py cheb
+python .\main.py choquet
 ```
 
-**Run all algorithms with individual plots:**
-```bash
-python main.py all
+Run Pareto Q-Learning:
+
+```powershell
+python .\main.py pql
 ```
 
-**Run all algorithms with comparison plots and final metrics table:**
-```bash
-python main.py compare
+Run deep methods:
+
+```powershell
+py -3.13 .\main.py deep-ws
+py -3.13 .\main.py deep-owa
+py -3.13 .\main.py deep-cheb
+py -3.13 .\main.py deep-choquet
 ```
 
----
+Run all tabular scalarized methods plus Pareto Q-Learning:
 
-## Expected Results
-
-| Algorithm | HV | IGD | Epsilon | Notes |
-|-----------|-----|-----|---------|-------|
-| MO Q-Learning | Medium | High | High | Misses concave regions |
-| OWA Q-Learning | Medium | Medium | Medium | Better balance than weighted sum |
-| Chebyshev Q-Learning | Medium–High | Medium | Medium | Reaches some concave regions |
-| Pareto Q-Learning | **Highest** | **Lowest** | **Lowest** | Full front in one run |
-
-PQL is expected to achieve the best metrics because it learns the full Pareto front without any fixed preference. The scalarisation methods are limited by the number and diversity of weight settings used.
-
----
-
-## Coordinate Convention
-
-All algorithms internally use different representations. Everything is converted to **maximisation form** before plotting and metric computation:
-
+```powershell
+python .\main.py all
 ```
-Internal training form:  (time_cost, treasure)
-Maximisation form:       (-time_cost, treasure)   [both axes: larger = better]
-Plot axes:               x = -Time Cost,  y = Treasure Value
+
+Run comparison mode:
+
+```powershell
+python .\main.py compare
 ```
+
+Note: `all` and `compare` currently cover the tabular scalarized methods plus
+Pareto Q-Learning. Deep methods are run separately with the `deep-*` commands.
+
+## Results
+
+Each method saves its outputs in a separate folder under `results/`.
+
+Examples:
+
+```text
+results/tabular_weighted_sum/
+results/tabular_owa/
+results/tabular_chebyshev/
+results/tabular_choquet/
+results/pareto_q_learning/
+results/deep_weighted_sum/
+results/deep_owa/
+results/deep_chebyshev/
+results/deep_choquet/
+```
+
+Typical saved files include:
+
+```text
+*_pareto_front.png
+*_hv.png
+*_igd.png
+*_epsilon.png
+final_solutions.json
+```
+
+## Metrics
+
+The project reports:
+
+| Metric | Direction | Meaning |
+| --- | --- | --- |
+| HV | Higher is better | Dominated objective-space volume |
+| IGD | Lower is better | Average distance from true front to learned front |
+| Epsilon | Lower is better | Minimum additive shift needed to dominate the true front |
+| Coverage | Higher is better | Number of true Pareto solutions recovered |
+| EUM | Higher is better | Expected utility over a set of weight vectors |
+
+Metrics are computed in maximization form:
+
+```text
+(-time_cost, treasure)
+```
+
+## Notes
+
+- Scalarization is used for action selection and Bellman next-action selection.
+- Rewards and final reported points remain raw environment outcomes.
+- Normalization is used only to make objectives comparable during scalarized
+  ranking.
+- Deep methods use replay memory, a target network, soft target updates, and
+  best-checkpoint selection.
+- Pareto Q-Learning is not preference-specific; it stores nondominated value
+  sets and approximates a full front in one run.
