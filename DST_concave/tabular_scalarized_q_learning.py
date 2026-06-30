@@ -2,7 +2,9 @@
 
 Weighted Sum, OWA, Chebyshev, and Choquet use the same vector-valued
 Q-learning loop. They differ only in the scalarization function that ranks
-normalized objective Q-vectors during action selection and Bellman backup.
+normalized objective Q-vectors for current action selection and for choosing
+the next action used by the Bellman backup. Bellman targets still use raw
+rewards and raw Q-values.
 """
 
 from collections import defaultdict
